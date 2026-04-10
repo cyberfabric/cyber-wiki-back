@@ -14,7 +14,7 @@ class GitProviderFactory:
     """
     
     @staticmethod
-    def create(provider: str, base_url: str, token: str, username: Optional[str] = None, custom_header: Optional[str] = None) -> BaseGitProvider:
+    def create(provider: str, base_url: str, token: str, username: Optional[str] = None, custom_header: Optional[str] = None, custom_header_token: Optional[str] = None) -> BaseGitProvider:
         """
         Create a Git provider instance.
         
@@ -23,7 +23,8 @@ class GitProviderFactory:
             base_url: Base URL for the provider API
             token: Access token
             username: Username (required for Bitbucket Server)
-            custom_header: Custom header name for authentication (e.g., 'X-Auth-Token')
+            custom_header: Custom header name for authentication (e.g., 'X-Custom-Token')
+            custom_header_token: Token value for custom header
         
         Returns:
             BaseGitProvider instance
@@ -36,7 +37,7 @@ class GitProviderFactory:
         elif provider == ServiceType.BITBUCKET_SERVER:
             if not username:
                 raise ValueError("Username is required for Bitbucket Server")
-            return BitbucketServerProvider(base_url=base_url, token=token, username=username, custom_header=custom_header)
+            return BitbucketServerProvider(base_url=base_url, token=token, username=username, custom_header=custom_header, custom_header_token=custom_header_token)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
     
@@ -51,10 +52,28 @@ class GitProviderFactory:
         Returns:
             BaseGitProvider instance
         """
+        from service_tokens.models import ServiceToken
+        
+        custom_header = None
+        custom_header_name = None
+        
+        # For Bitbucket Server, also fetch custom header token if available
+        if service_token.service_type == ServiceType.BITBUCKET_SERVER:
+            try:
+                custom_token = ServiceToken.objects.get(
+                    user=service_token.user,
+                    service_type=ServiceType.CUSTOM_HEADER
+                )
+                custom_header = custom_token.get_token()
+                custom_header_name = custom_token.header_name
+            except ServiceToken.DoesNotExist:
+                pass  # Custom header token not configured, continue without it
+        
         return GitProviderFactory.create(
             provider=service_token.service_type,
             base_url=service_token.base_url,
             token=service_token.get_token(),
             username=service_token.get_username(),
-            custom_header=service_token.header_name
+            custom_header=custom_header_name,
+            custom_header_token=custom_header
         )

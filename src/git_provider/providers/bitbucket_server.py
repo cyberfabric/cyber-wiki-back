@@ -13,44 +13,103 @@ class BitbucketServerProvider(BaseGitProvider):
     Documentation: https://docs.atlassian.com/bitbucket-server/rest/
     """
     
-    def __init__(self, base_url: str, token: str, username: Optional[str] = None, custom_header: Optional[str] = None):
+    def __init__(self, base_url: str, token: str, username: Optional[str] = None, custom_header: Optional[str] = None, custom_header_token: Optional[str] = None):
         super().__init__(base_url, token, username)
-        # Use custom header if provided (e.g., for ZTA tokens), otherwise use Bearer token
-        if custom_header:
-            self.headers = {
-                custom_header: token,
-                'Content-Type': 'application/json',
-            }
-        else:
-            self.headers = {
-                'Authorization': f'Bearer {token}',
-                'Content-Type': 'application/json',
-            }
+        
+        # Set up headers
+        self.headers = {
+            'Content-Type': 'application/json',
+        }
+        
+        # Add custom header if provided (for additional authentication)
+        if custom_header and custom_header_token:
+            self.headers[custom_header] = custom_header_token
+        
+        # Cache for all repositories (to avoid re-fetching on pagination)
+        self._all_repos_cache = None
     
     def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
         """Make HTTP request to Bitbucket Server API."""
         url = f"{self.base_url}/rest/api/1.0{endpoint}"
+        
+        # Use HTTP Basic Auth for Bitbucket Server (username:token)
+        if self.username:
+            kwargs['auth'] = (self.username, self.token)
+        
         response = requests.request(method, url, headers=self.headers, **kwargs)
         response.raise_for_status()
         return response
     
-    def list_repositories(self, page: int = 1, per_page: int = 30) -> Dict[str, Any]:
-        """List repositories accessible to the authenticated user."""
+    def list_projects(self, page: int = 1, per_page: int = 100) -> Dict[str, Any]:
+        """List all projects accessible to the user."""
         start = (page - 1) * per_page
-        response = self._request('GET', '/repos', params={
+        response = self._request('GET', '/projects', params={
             'start': start,
             'limit': per_page,
         })
         
         data = response.json()
-        repos = data.get('values', [])
+        projects = data.get('values', [])
         
         return {
-            'repositories': [self._normalize_repo(repo) for repo in repos],
+            'projects': [self._normalize_project(project) for project in projects],
             'page': page,
             'per_page': per_page,
-            'total': data.get('size', len(repos)),
+            'total': data.get('size', len(projects)),
             'is_last_page': data.get('isLastPage', True),
+        }
+    
+    def list_repositories(self, page: int = 1, per_page: int = 30, project_key: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List repositories. If project_key is provided, list repos for that project only.
+        Otherwise, list all repos (legacy behavior, may have duplicates).
+        """
+        if project_key:
+            # List repos for specific project
+            start = (page - 1) * per_page
+            response = self._request('GET', f'/projects/{project_key}/repos', params={
+                'start': start,
+                'limit': per_page,
+            })
+            
+            data = response.json()
+            repos = data.get('values', [])
+            
+            return {
+                'repositories': [self._normalize_repo(repo) for repo in repos],
+                'page': page,
+                'per_page': per_page,
+                'total': data.get('size', len(repos)),
+                'is_last_page': data.get('isLastPage', True),
+            }
+        else:
+            # Legacy: list all repos (may have duplicates)
+            start = (page - 1) * per_page
+            response = self._request('GET', '/repos', params={
+                'start': start,
+                'limit': per_page,
+            })
+            
+            data = response.json()
+            repos = data.get('values', [])
+            
+            return {
+                'repositories': [self._normalize_repo(repo) for repo in repos],
+                'page': page,
+                'per_page': per_page,
+                'total': data.get('size', len(repos)),
+                'is_last_page': data.get('isLastPage', True),
+            }
+    
+    def _normalize_project(self, project: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize project data to common format."""
+        return {
+            'id': project.get('key'),
+            'key': project.get('key'),
+            'name': project.get('name'),
+            'description': project.get('description', ''),
+            'public': project.get('public', False),
+            'type': project.get('type', 'NORMAL'),
         }
     
     def get_repository(self, repo_id: str) -> Dict[str, Any]:

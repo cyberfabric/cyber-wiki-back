@@ -55,15 +55,40 @@ class GitProviderViewSet(viewsets.ViewSet):
         responses={200: RepositorySerializer(many=True)},
         tags=['git-provider'],
     )
+    @action(detail=False, methods=['get'], url_path='projects')
+    def list_projects(self, request):
+        """List projects."""
+        try:
+            provider = self._get_provider(request)
+            page = int(request.query_params.get('page', 1))
+            per_page = int(request.query_params.get('per_page', 100))
+            
+            # Check if provider supports list_projects
+            if not hasattr(provider, 'list_projects'):
+                return Response(
+                    {'error': 'Provider does not support project listing', 'code': 'NOT_SUPPORTED'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            result = provider.list_projects(page=page, per_page=per_page)
+            return Response(result)
+        except Exception as e:
+            logger.exception(f"Error listing projects: {str(e)}")
+            return Response(
+                {'error': 'Internal server error', 'code': 'INTERNAL_ERROR', 'detail': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
     @action(detail=False, methods=['get'], url_path='repositories')
     def list_repositories(self, request):
-        """List repositories."""
+        """List repositories. Optionally filter by project_key."""
         try:
             provider = self._get_provider(request)
             page = int(request.query_params.get('page', 1))
             per_page = int(request.query_params.get('per_page', 30))
+            project_key = request.query_params.get('project_key')
             
-            result = provider.list_repositories(page=page, per_page=per_page)
+            result = provider.list_repositories(page=page, per_page=per_page, project_key=project_key)
             return Response(result)
         except ValueError as e:
             logger.error(f"Invalid request for list_repositories: {str(e)}")
@@ -72,7 +97,31 @@ class GitProviderViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
+            import requests
             logger.exception(f"Error listing repositories: {str(e)}")
+            
+            # Check if it's an authentication error
+            if isinstance(e, requests.exceptions.HTTPError):
+                if e.response.status_code == 401:
+                    return Response(
+                        {
+                            'error': 'Authentication failed',
+                            'code': 'AUTHENTICATION_FAILED',
+                            'detail': 'Invalid credentials. Please check your tokens in the Configuration page and ensure they are valid and not expired.',
+                            'help': 'Verify: 1) Bitbucket token is valid, 2) Username is correct, 3) Custom header token (if required) is valid and not expired'
+                        },
+                        status=status.HTTP_401_UNAUTHORIZED
+                    )
+                elif e.response.status_code == 403:
+                    return Response(
+                        {
+                            'error': 'Access forbidden',
+                            'code': 'FORBIDDEN',
+                            'detail': 'You do not have permission to access this resource. Check your token permissions.',
+                        },
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            
             return Response(
                 {'error': 'Internal server error', 'code': 'INTERNAL_ERROR', 'detail': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
