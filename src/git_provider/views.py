@@ -1,0 +1,290 @@
+"""
+Views for Git provider management and operations.
+"""
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from service_tokens.models import ServiceToken
+from .factory import GitProviderFactory
+from .serializers import (
+    RepositorySerializer,
+    FileContentSerializer, TreeEntrySerializer, PullRequestSerializer,
+    CommitSerializer
+)
+import base64
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class GitProviderViewSet(viewsets.ViewSet):
+    """
+    ViewSet for Git provider operations.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    # Note: Git credentials are now managed via /api/service-tokens/v1/tokens/
+    # This ViewSet only handles repository operations using those credentials
+    
+    def _get_provider(self, request):
+        """Get Git provider instance for the user."""
+        provider_type = request.query_params.get('provider')
+        base_url = request.query_params.get('base_url')
+        
+        if not provider_type or not base_url:
+            raise ValueError('provider and base_url are required')
+        
+        try:
+            service_token = ServiceToken.objects.get(user=request.user, service_type=provider_type, base_url=base_url)
+            return GitProviderFactory.create_from_service_token(service_token)
+        except ServiceToken.DoesNotExist:
+            raise ValueError('Git credentials not found')
+    
+    @extend_schema(
+        operation_id='git_provider_repositories_list',
+        summary='List repositories',
+        description='List repositories accessible to the authenticated user.',
+        parameters=[
+            OpenApiParameter(name='provider', type=str, required=True),
+            OpenApiParameter(name='base_url', type=str, required=True),
+            OpenApiParameter(name='page', type=int, required=False),
+            OpenApiParameter(name='per_page', type=int, required=False),
+        ],
+        responses={200: RepositorySerializer(many=True)},
+        tags=['git-provider'],
+    )
+    @action(detail=False, methods=['get'], url_path='repositories')
+    def list_repositories(self, request):
+        """List repositories."""
+        try:
+            provider = self._get_provider(request)
+            page = int(request.query_params.get('page', 1))
+            per_page = int(request.query_params.get('per_page', 30))
+            
+            result = provider.list_repositories(page=page, per_page=per_page)
+            return Response(result)
+        except ValueError as e:
+            logger.error(f"Invalid request for list_repositories: {str(e)}")
+            return Response(
+                {'error': str(e), 'code': 'INVALID_REQUEST'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.exception(f"Error listing repositories: {str(e)}")
+            return Response(
+                {'error': 'Internal server error', 'code': 'INTERNAL_ERROR', 'detail': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @extend_schema(
+        operation_id='git_provider_repository_get',
+        summary='Get repository details',
+        description='Get details of a specific repository.',
+        parameters=[
+            OpenApiParameter(name='provider', type=str, required=True),
+            OpenApiParameter(name='base_url', type=str, required=True),
+            OpenApiParameter(name='repo_id', type=str, required=True, location=OpenApiParameter.PATH),
+        ],
+        responses={200: RepositorySerializer},
+        tags=['git-provider'],
+    )
+    @action(detail=True, methods=['get'], url_path='')
+    def get_repository(self, request, pk=None):
+        """Get repository details."""
+        try:
+            provider = self._get_provider(request)
+            repo = provider.get_repository(pk)
+            return Response(repo)
+        except ValueError as e:
+            return Response(
+                {'error': str(e), 'code': 'INVALID_REQUEST'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @extend_schema(
+        operation_id='git_provider_file_get',
+        summary='Get file content',
+        description='Get content of a specific file.',
+        parameters=[
+            OpenApiParameter(name='provider', type=str, required=True),
+            OpenApiParameter(name='base_url', type=str, required=True),
+            OpenApiParameter(name='repo_id', type=str, required=True, location=OpenApiParameter.PATH),
+            OpenApiParameter(name='path', type=str, required=True),
+            OpenApiParameter(name='branch', type=str, required=False),
+        ],
+        responses={200: FileContentSerializer},
+        tags=['git-provider'],
+    )
+    @action(detail=True, methods=['get'], url_path='files/(?P<path>.+)')
+    def get_file(self, request, pk=None, path=None):
+        """Get file content."""
+        try:
+            provider = self._get_provider(request)
+            branch = request.query_params.get('branch', 'main')
+            
+            file_data = provider.get_file_content(pk, path, branch)
+            
+            # Decode base64 content if needed
+            if file_data.get('encoding') == 'base64':
+                try:
+                    file_data['content'] = base64.b64decode(file_data['content']).decode('utf-8')
+                    file_data['encoding'] = 'utf-8'
+                except Exception:
+                    pass  # Keep as base64 if decode fails
+            
+            return Response(file_data)
+        except ValueError as e:
+            return Response(
+                {'error': str(e), 'code': 'INVALID_REQUEST'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @extend_schema(
+        operation_id='git_provider_tree_get',
+        summary='Get directory tree',
+        description='Get directory tree for a repository.',
+        parameters=[
+            OpenApiParameter(name='provider', type=str, required=True),
+            OpenApiParameter(name='base_url', type=str, required=True),
+            OpenApiParameter(name='repo_id', type=str, required=True, location=OpenApiParameter.PATH),
+            OpenApiParameter(name='path', type=str, required=False),
+            OpenApiParameter(name='branch', type=str, required=False),
+            OpenApiParameter(name='recursive', type=bool, required=False),
+        ],
+        responses={200: TreeEntrySerializer(many=True)},
+        tags=['git-provider'],
+    )
+    @action(detail=True, methods=['get'], url_path='tree')
+    def get_tree(self, request, pk=None):
+        """Get directory tree."""
+        try:
+            provider = self._get_provider(request)
+            path = request.query_params.get('path', '')
+            branch = request.query_params.get('branch', 'main')
+            recursive = request.query_params.get('recursive', 'false').lower() == 'true'
+            
+            tree = provider.get_directory_tree(pk, path, branch, recursive)
+            return Response(tree)
+        except ValueError as e:
+            return Response(
+                {'error': str(e), 'code': 'INVALID_REQUEST'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @extend_schema(
+        operation_id='git_provider_pull_requests_list',
+        summary='List pull requests',
+        description='List pull requests for a repository.',
+        parameters=[
+            OpenApiParameter(name='provider', type=str, required=True),
+            OpenApiParameter(name='base_url', type=str, required=True),
+            OpenApiParameter(name='repo_id', type=str, required=True, location=OpenApiParameter.PATH),
+            OpenApiParameter(name='state', type=str, required=False),
+            OpenApiParameter(name='page', type=int, required=False),
+            OpenApiParameter(name='per_page', type=int, required=False),
+        ],
+        responses={200: PullRequestSerializer(many=True)},
+        tags=['git-provider'],
+    )
+    @action(detail=True, methods=['get'], url_path='pull-requests')
+    def list_pull_requests(self, request, pk=None):
+        """List pull requests."""
+        try:
+            provider = self._get_provider(request)
+            state = request.query_params.get('state', 'open')
+            page = int(request.query_params.get('page', 1))
+            per_page = int(request.query_params.get('per_page', 30))
+            
+            result = provider.list_pull_requests(pk, state, page, per_page)
+            return Response(result)
+        except ValueError as e:
+            return Response(
+                {'error': str(e), 'code': 'INVALID_REQUEST'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @extend_schema(
+        operation_id='git_provider_pull_request_get',
+        summary='Get pull request details',
+        description='Get details of a specific pull request.',
+        parameters=[
+            OpenApiParameter(name='provider', type=str, required=True),
+            OpenApiParameter(name='base_url', type=str, required=True),
+            OpenApiParameter(name='repo_id', type=str, required=True, location=OpenApiParameter.PATH),
+            OpenApiParameter(name='number', type=int, required=True, location=OpenApiParameter.PATH),
+        ],
+        responses={200: PullRequestSerializer},
+        tags=['git-provider'],
+    )
+    @action(detail=True, methods=['get'], url_path='pull-requests/(?P<number>[0-9]+)')
+    def get_pull_request(self, request, pk=None, number=None):
+        """Get pull request details."""
+        try:
+            provider = self._get_provider(request)
+            pr = provider.get_pull_request(pk, int(number))
+            return Response(pr)
+        except ValueError as e:
+            return Response(
+                {'error': str(e), 'code': 'INVALID_REQUEST'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @extend_schema(
+        operation_id='git_provider_pull_request_diff_get',
+        summary='Get pull request diff',
+        description='Get diff for a pull request.',
+        parameters=[
+            OpenApiParameter(name='provider', type=str, required=True),
+            OpenApiParameter(name='base_url', type=str, required=True),
+            OpenApiParameter(name='repo_id', type=str, required=True, location=OpenApiParameter.PATH),
+            OpenApiParameter(name='number', type=int, required=True, location=OpenApiParameter.PATH),
+        ],
+        responses={200: str},
+        tags=['git-provider'],
+    )
+    @action(detail=True, methods=['get'], url_path='pull-requests/(?P<number>[0-9]+)/diff')
+    def get_pull_request_diff(self, request, pk=None, number=None):
+        """Get pull request diff."""
+        try:
+            provider = self._get_provider(request)
+            diff = provider.get_pull_request_diff(pk, int(number))
+            return Response({'diff': diff})
+        except ValueError as e:
+            return Response(
+                {'error': str(e), 'code': 'INVALID_REQUEST'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @extend_schema(
+        operation_id='git_provider_commits_list',
+        summary='List commits',
+        description='List commits for a repository.',
+        parameters=[
+            OpenApiParameter(name='provider', type=str, required=True),
+            OpenApiParameter(name='base_url', type=str, required=True),
+            OpenApiParameter(name='repo_id', type=str, required=True, location=OpenApiParameter.PATH),
+            OpenApiParameter(name='branch', type=str, required=False),
+            OpenApiParameter(name='page', type=int, required=False),
+            OpenApiParameter(name='per_page', type=int, required=False),
+        ],
+        responses={200: CommitSerializer(many=True)},
+        tags=['git-provider'],
+    )
+    @action(detail=True, methods=['get'], url_path='commits')
+    def list_commits(self, request, pk=None):
+        """List commits."""
+        try:
+            provider = self._get_provider(request)
+            branch = request.query_params.get('branch', 'main')
+            page = int(request.query_params.get('page', 1))
+            per_page = int(request.query_params.get('per_page', 30))
+            
+            result = provider.list_commits(pk, branch, page, per_page)
+            return Response(result)
+        except ValueError as e:
+            return Response(
+                {'error': str(e), 'code': 'INVALID_REQUEST'},
+                status=status.HTTP_400_BAD_REQUEST
+            )

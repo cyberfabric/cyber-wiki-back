@@ -1,0 +1,27 @@
+# Development and Testing Dependencies
+
+# Testing
+pytest==8.0.0
+pytest-django==4.8.0
+pytest-cov==4.1.0
+pytest-xdist==3.5.0  # Parallel test execution
+pytest-mock==3.12.0
+factory-boy==3.3.0  # Test data factories
+faker==22.6.0  # Fake data generation
+
+# Code Quality
+black==24.1.1  # Code formatting
+flake8==7.0.0  # Linting
+isort==5.13.2  # Import sorting
+mypy==1.8.0  # Type checking
+pylint==3.0.3  # Additional linting
+
+# Coverage
+coverage[toml]==7.4.1
+
+# Debugging
+ipdb==0.13.13
+django-debug-toolbar==4.3.0
+
+# API Testing
+requests-mock==1.11.0

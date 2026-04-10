@@ -1,0 +1,35 @@
+# Core Framework
+Django==5.2.9
+djangorestframework==3.16.1
+
+# API Documentation
+drf-spectacular==0.27.2
+
+# Authentication
+Authlib==1.6.9
+
+# Git Operations
+GitPython==3.1.44
+
+# Background Tasks
+APScheduler==3.10.4
+
+# Security & Encryption
+cryptography==44.0.2
+
+# Configuration & Data
+PyYAML==6.0.1
+requests==2.32.5
+
+# Production Server
+gunicorn==23.0.0
+
+# CORS & Compression
+django-cors-headers==4.6.0
+django-brotli==0.2.1
+
+# Testing
+pytest==8.3.4
+pytest-django==4.9.0
+pytest-mock==3.14.0
+pytest-cov==4.1.0

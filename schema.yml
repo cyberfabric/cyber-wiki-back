@@ -1,0 +1,1337 @@
+openapi: 3.0.3
+info:
+  title: CyberWiki API
+  version: 1.0.0
+  description: REST API for CyberWiki - Git-backed collaborative documentation platform
+paths:
+  /api/auth/v1/login:
+    post:
+      operationId: auth_login
+      description: Authenticate user with username and password. Returns user information
+        and sets session cookie.
+      summary: User login
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+          description: ''
+        '400':
+          description: Invalid credentials
+  /api/auth/v1/logout:
+    post:
+      operationId: auth_logout
+      description: Logout current user and destroy session.
+      summary: User logout
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: Successfully logged out
+  /api/auth/v1/me:
+    get:
+      operationId: auth_me
+      description: Retrieve information about the currently authenticated user.
+      summary: Get current user info
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+          description: ''
+        '401':
+          description: Not authenticated
+  /api/auth/v1/sso/callback:
+    get:
+      operationId: auth_sso_callback
+      description: Handle callback from SSO provider after authentication.
+      summary: SSO callback handler
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+          description: ''
+        '400':
+          description: Invalid SSO response
+  /api/auth/v1/sso/login:
+    post:
+      operationId: auth_sso_login
+      description: Redirect to SSO provider for authentication (OIDC).
+      summary: SSO login redirect
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '302':
+          description: Redirect to SSO provider
+        '503':
+          description: SSO not configured
+  /api/enrichments/v1/list/:
+    get:
+      operationId: enrichments_v1_list_retrieve
+      tags:
+      - enrichments
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/git-provider/v1/repositories/{id}/commits/:
+    get:
+      operationId: git_provider_commits_list
+      description: List commits for a repository.
+      summary: List commits
+      parameters:
+      - in: query
+        name: base_url
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: branch
+        schema:
+          type: string
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: page
+        schema:
+          type: integer
+      - in: query
+        name: per_page
+        schema:
+          type: integer
+      - in: query
+        name: provider
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: repo_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - git-provider
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Commit'
+          description: ''
+  /api/git-provider/v1/repositories/{id}/files/{path}/:
+    get:
+      operationId: git_provider_file_get
+      description: Get content of a specific file.
+      summary: Get file content
+      parameters:
+      - in: query
+        name: base_url
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: branch
+        schema:
+          type: string
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: path
+        schema:
+          type: string
+          pattern: ^.+$
+        required: true
+      - in: query
+        name: path
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: provider
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: repo_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - git-provider
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileContent'
+          description: ''
+  /api/git-provider/v1/repositories/{id}/get_repository/:
+    get:
+      operationId: git_provider_repository_get
+      description: Get details of a specific repository.
+      summary: Get repository details
+      parameters:
+      - in: query
+        name: base_url
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: provider
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: repo_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - git-provider
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repository'
+          description: ''
+  /api/git-provider/v1/repositories/{id}/pull-requests/:
+    get:
+      operationId: git_provider_pull_requests_list
+      description: List pull requests for a repository.
+      summary: List pull requests
+      parameters:
+      - in: query
+        name: base_url
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: page
+        schema:
+          type: integer
+      - in: query
+        name: per_page
+        schema:
+          type: integer
+      - in: query
+        name: provider
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: repo_id
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: state
+        schema:
+          type: string
+      tags:
+      - git-provider
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PullRequest'
+          description: ''
+  /api/git-provider/v1/repositories/{id}/pull-requests/{number}/:
+    get:
+      operationId: git_provider_pull_request_get
+      description: Get details of a specific pull request.
+      summary: Get pull request details
+      parameters:
+      - in: query
+        name: base_url
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: number
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: provider
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: repo_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - git-provider
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullRequest'
+          description: ''
+  /api/git-provider/v1/repositories/{id}/pull-requests/{number}/diff/:
+    get:
+      operationId: git_provider_pull_request_diff_get
+      description: Get diff for a pull request.
+      summary: Get pull request diff
+      parameters:
+      - in: query
+        name: base_url
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: number
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: provider
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: repo_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - git-provider
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: string
+          description: ''
+  /api/git-provider/v1/repositories/{id}/tree/:
+    get:
+      operationId: git_provider_tree_get
+      description: Get directory tree for a repository.
+      summary: Get directory tree
+      parameters:
+      - in: query
+        name: base_url
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: branch
+        schema:
+          type: string
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: path
+        schema:
+          type: string
+      - in: query
+        name: provider
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: recursive
+        schema:
+          type: boolean
+      - in: path
+        name: repo_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - git-provider
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TreeEntry'
+          description: ''
+  /api/git-provider/v1/repositories/credentials/:
+    get:
+      operationId: git_provider_credentials_get
+      description: Get current Git provider credentials for the authenticated user.
+      summary: Get Git credentials
+      tags:
+      - git-provider
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GitToken'
+          description: ''
+    post:
+      operationId: git_provider_credentials_save
+      description: Save or update Git provider credentials.
+      summary: Save Git credentials
+      tags:
+      - git-provider
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GitTokenCreateRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitToken'
+          description: ''
+    delete:
+      operationId: git_provider_credentials_delete
+      description: Delete Git provider credentials.
+      summary: Delete Git credentials
+      tags:
+      - git-provider
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/git-provider/v1/repositories/repositories/:
+    get:
+      operationId: git_provider_repositories_list
+      description: List repositories accessible to the authenticated user.
+      summary: List repositories
+      parameters:
+      - in: query
+        name: base_url
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: page
+        schema:
+          type: integer
+      - in: query
+        name: per_page
+        schema:
+          type: integer
+      - in: query
+        name: provider
+        schema:
+          type: string
+        required: true
+      tags:
+      - git-provider
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Repository'
+          description: ''
+  /api/source/v1/get/:
+    get:
+      operationId: source_v1_get_retrieve
+      tags:
+      - source
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/user_management/v1/favorites:
+    get:
+      operationId: user_management_favorites_list
+      description: List all favorite repositories for the current user.
+      summary: List favorite repositories
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - user_management
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedFavoriteRepositoryList'
+          description: ''
+    post:
+      operationId: user_management_favorites_create
+      description: Add a repository to favorites.
+      summary: Add favorite repository
+      tags:
+      - user_management
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FavoriteRepositoryRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoriteRepository'
+          description: ''
+  /api/user_management/v1/favorites/{id}:
+    delete:
+      operationId: user_management_favorites_delete
+      description: Remove a repository from favorites.
+      summary: Remove favorite repository
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - user_management
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/user_management/v1/profile:
+    get:
+      operationId: user_management_profile_get
+      description: Retrieve the current user's profile information.
+      summary: Get user profile
+      tags:
+      - user_management
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+          description: ''
+    put:
+      operationId: user_management_profile_update
+      description: Update the current user's profile settings.
+      summary: Update user profile
+      tags:
+      - user_management
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserProfileRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+          description: ''
+  /api/user_management/v1/recent:
+    get:
+      operationId: user_management_recent_list
+      description: List recently viewed repositories for the current user.
+      summary: List recent repositories
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - user_management
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedRecentRepositoryList'
+          description: ''
+  /api/user_management/v1/tokens:
+    get:
+      operationId: user_management_tokens_list
+      description: List all API tokens for the current user.
+      summary: List API tokens
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - user_management
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedApiTokenList'
+          description: ''
+    post:
+      operationId: user_management_tokens_create
+      description: Create a new API token for programmatic access.
+      summary: Create API token
+      tags:
+      - user_management
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiTokenCreateRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiToken'
+          description: ''
+  /api/user_management/v1/tokens/{id}:
+    delete:
+      operationId: user_management_tokens_delete
+      description: Delete an API token by ID.
+      summary: Delete API token
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - user_management
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/user_management/v1/view-modes/{repo_id}:
+    get:
+      operationId: user_management_view_mode_get
+      description: Get the view mode preference for a specific repository.
+      summary: Get repository view mode
+      parameters:
+      - in: path
+        name: repo_id
+        schema:
+          type: string
+        description: Repository identifier
+        required: true
+      tags:
+      - user_management
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryViewMode'
+          description: ''
+    put:
+      operationId: user_management_view_mode_update
+      description: Update the view mode preference for a specific repository.
+      summary: Update repository view mode
+      parameters:
+      - in: path
+        name: repo_id
+        schema:
+          type: string
+        description: Repository identifier
+        required: true
+      tags:
+      - user_management
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepositoryViewModeRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryViewMode'
+          description: ''
+  /api/wiki/v1/spaces/:
+    get:
+      operationId: wiki_v1_spaces_retrieve
+      tags:
+      - wiki
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+components:
+  schemas:
+    ApiToken:
+      type: object
+      description: Serializer for API tokens.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+        name:
+          type: string
+          description: Descriptive name for the token (e.g., "CLI Access", "CI/CD")
+          maxLength: 255
+        token:
+          type: string
+          readOnly: true
+        last_used_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - last_used_at
+      - name
+      - token
+      - username
+    ApiTokenCreateRequest:
+      type: object
+      description: Serializer for creating API tokens.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Descriptive name for the token (e.g., "CLI Access", "CI/CD")
+          maxLength: 255
+      required:
+      - name
+    Commit:
+      type: object
+      description: Serializer for commit data.
+      properties:
+        sha:
+          type: string
+          description: Commit SHA
+        message:
+          type: string
+          description: Commit message
+        author:
+          type: string
+          description: Author name
+        date:
+          type: string
+          description: Commit date
+        url:
+          type: string
+          format: uri
+          description: Commit URL
+      required:
+      - author
+      - date
+      - message
+      - sha
+      - url
+    FavoriteRepository:
+      type: object
+      description: Serializer for favorite repositories.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        repository_id:
+          type: string
+          description: Repository identifier (e.g., "projectkey_reposlug")
+          maxLength: 255
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - repository_id
+    FavoriteRepositoryRequest:
+      type: object
+      description: Serializer for favorite repositories.
+      properties:
+        repository_id:
+          type: string
+          minLength: 1
+          description: Repository identifier (e.g., "projectkey_reposlug")
+          maxLength: 255
+      required:
+      - repository_id
+    FileContent:
+      type: object
+      description: Serializer for file content.
+      properties:
+        content:
+          type: string
+          description: File content (may be base64 encoded)
+        encoding:
+          type: string
+          description: Content encoding (utf-8 or base64)
+        sha:
+          type: string
+          description: File SHA/hash
+        size:
+          type: integer
+          description: File size in bytes
+        path:
+          type: string
+          description: File path
+      required:
+      - content
+      - encoding
+      - path
+      - sha
+      - size
+    GitToken:
+      type: object
+      description: Serializer for Git tokens (without exposing actual token).
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        provider:
+          allOf:
+          - $ref: '#/components/schemas/ProviderEnum'
+          description: |-
+            Git provider type
+
+            * `github` - GitHub
+            * `bitbucket_server` - Bitbucket Server
+        base_url:
+          type: string
+          format: uri
+          description: Base URL for the Git provider (e.g., https://api.github.com
+            or https://bitbucket.example.com)
+          maxLength: 500
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - base_url
+      - created_at
+      - id
+      - provider
+      - updated_at
+    GitTokenCreateRequest:
+      type: object
+      description: Serializer for creating/updating Git tokens.
+      properties:
+        provider:
+          allOf:
+          - $ref: '#/components/schemas/ProviderEnum'
+          description: |-
+            Git provider type (github or bitbucket_server)
+
+            * `github` - GitHub
+            * `bitbucket_server` - Bitbucket Server
+        base_url:
+          type: string
+          format: uri
+          minLength: 1
+          description: Base URL for the Git provider API
+        token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: Access token for authentication
+        username:
+          type: string
+          description: Username (required for Bitbucket Server)
+      required:
+      - base_url
+      - provider
+      - token
+    LoginRequest:
+      type: object
+      description: Serializer for login requests.
+      properties:
+        username:
+          type: string
+          minLength: 1
+          description: Username
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: Password
+      required:
+      - password
+      - username
+    PaginatedApiTokenList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiToken'
+    PaginatedFavoriteRepositoryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/FavoriteRepository'
+    PaginatedRecentRepositoryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecentRepository'
+    ProviderEnum:
+      enum:
+      - github
+      - bitbucket_server
+      type: string
+      description: |-
+        * `github` - GitHub
+        * `bitbucket_server` - Bitbucket Server
+    PullRequest:
+      type: object
+      description: Serializer for pull request data.
+      properties:
+        number:
+          type: integer
+          description: Pull request number
+        title:
+          type: string
+          description: Pull request title
+        state:
+          type: string
+          description: Pull request state
+        author:
+          type: string
+          description: Author username
+        created_at:
+          type: string
+          description: Creation timestamp
+        updated_at:
+          type: string
+          description: Last update timestamp
+        merged:
+          type: boolean
+          description: Whether PR is merged
+        url:
+          type: string
+          format: uri
+          description: Pull request URL
+      required:
+      - author
+      - created_at
+      - merged
+      - number
+      - state
+      - title
+      - updated_at
+      - url
+    RecentRepository:
+      type: object
+      description: Serializer for recent repositories.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        repository_id:
+          type: string
+          maxLength: 255
+        last_viewed_at:
+          type: string
+          format: date-time
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - last_viewed_at
+      - repository_id
+    Repository:
+      type: object
+      description: Serializer for repository data.
+      properties:
+        id:
+          type: string
+          description: Repository identifier
+        name:
+          type: string
+          description: Repository name
+        full_name:
+          type: string
+          description: Full repository name
+        description:
+          type: string
+        private:
+          type: boolean
+        default_branch:
+          type: string
+        url:
+          type: string
+          format: uri
+        clone_url:
+          type: string
+          format: uri
+        updated_at:
+          type: string
+      required:
+      - clone_url
+      - default_branch
+      - description
+      - full_name
+      - id
+      - name
+      - private
+      - updated_at
+      - url
+    RepositoryViewMode:
+      type: object
+      description: Serializer for repository view mode preferences.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        repository_id:
+          type: string
+          maxLength: 255
+        view_mode:
+          $ref: '#/components/schemas/ViewModeEnum'
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - id
+      - repository_id
+      - updated_at
+    RepositoryViewModeRequest:
+      type: object
+      description: Serializer for repository view mode preferences.
+      properties:
+        repository_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        view_mode:
+          $ref: '#/components/schemas/ViewModeEnum'
+      required:
+      - repository_id
+    RoleEnum:
+      enum:
+      - admin
+      - editor
+      - commenter
+      - viewer
+      - guest
+      type: string
+      description: |-
+        * `admin` - Admin
+        * `editor` - Editor
+        * `commenter` - Commenter
+        * `viewer` - Viewer
+        * `guest` - Guest
+    TreeEntry:
+      type: object
+      description: Serializer for tree/directory entry.
+      properties:
+        path:
+          type: string
+          description: File/directory path
+        type:
+          type: string
+          description: Entry type (file or dir)
+        size:
+          type: integer
+          description: Size in bytes
+        sha:
+          type: string
+          description: SHA/hash
+      required:
+      - path
+      - sha
+      - size
+      - type
+    UserInfo:
+      type: object
+      description: Serializer for current user information.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+        email:
+          type: string
+          format: email
+          title: Email address
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        role:
+          type: string
+          readOnly: true
+        settings:
+          readOnly: true
+      required:
+      - id
+      - role
+      - settings
+      - username
+    UserProfile:
+      type: object
+      description: Serializer for UserProfile with user details.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          description: |-
+            User role for permission management
+
+            * `admin` - Admin
+            * `editor` - Editor
+            * `commenter` - Commenter
+            * `viewer` - Viewer
+            * `guest` - Guest
+        sso_provider:
+          type: string
+          readOnly: true
+          nullable: true
+        last_sso_login:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        settings:
+          description: User preferences and settings (JSON)
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - email
+      - id
+      - last_sso_login
+      - sso_provider
+      - updated_at
+      - username
+    UserProfileRequest:
+      type: object
+      description: Serializer for UserProfile with user details.
+      properties:
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          description: |-
+            User role for permission management
+
+            * `admin` - Admin
+            * `editor` - Editor
+            * `commenter` - Commenter
+            * `viewer` - Viewer
+            * `guest` - Guest
+        settings:
+          description: User preferences and settings (JSON)
+    ViewModeEnum:
+      enum:
+      - developer
+      - document
+      type: string
+      description: |-
+        * `developer` - Developer Mode
+        * `document` - Document Mode
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid

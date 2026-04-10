@@ -1,0 +1,5 @@
+# Production-only dependencies
+# Install with: pip install -r requirements.txt -r requirements-prod.txt
+
+# PostgreSQL adapter (only needed for production)
+psycopg2-binary==2.9.10
