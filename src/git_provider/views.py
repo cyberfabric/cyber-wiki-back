@@ -159,21 +159,34 @@ class GitProviderViewSet(viewsets.ViewSet):
         parameters=[
             OpenApiParameter(name='provider', type=str, required=True),
             OpenApiParameter(name='base_url', type=str, required=True),
-            OpenApiParameter(name='repo_id', type=str, required=True, location=OpenApiParameter.PATH),
-            OpenApiParameter(name='path', type=str, required=True),
+            OpenApiParameter(name='project_key', type=str, required=True, description='Project key (for Bitbucket Server) or owner (for GitHub)'),
+            OpenApiParameter(name='repo_slug', type=str, required=True, description='Repository slug/name'),
+            OpenApiParameter(name='file_path', type=str, required=True, description='Path to the file'),
             OpenApiParameter(name='branch', type=str, required=False),
         ],
         responses={200: FileContentSerializer},
         tags=['git-provider'],
     )
-    @action(detail=True, methods=['get'], url_path='files/(?P<path>.+)')
-    def get_file(self, request, pk=None, path=None):
+    @action(detail=False, methods=['get'], url_path='file')
+    def get_file(self, request):
         """Get file content."""
         try:
             provider = self._get_provider(request)
+            project_key = request.query_params.get('project_key')
+            repo_slug = request.query_params.get('repo_slug')
+            file_path = request.query_params.get('file_path')
             branch = request.query_params.get('branch', 'main')
             
-            file_data = provider.get_file_content(pk, path, branch)
+            if not project_key or not repo_slug or not file_path:
+                return Response(
+                    {'error': 'project_key, repo_slug, and file_path are required', 'code': 'MISSING_PARAMETERS'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Build repo_id in the format expected by providers
+            repo_id = f"{project_key}_{repo_slug}"
+            
+            file_data = provider.get_file_content(repo_id, file_path, branch)
             
             # Decode base64 content if needed
             if file_data.get('encoding') == 'base64':
@@ -197,7 +210,8 @@ class GitProviderViewSet(viewsets.ViewSet):
         parameters=[
             OpenApiParameter(name='provider', type=str, required=True),
             OpenApiParameter(name='base_url', type=str, required=True),
-            OpenApiParameter(name='repo_id', type=str, required=True, location=OpenApiParameter.PATH),
+            OpenApiParameter(name='project_key', type=str, required=True, description='Project key (for Bitbucket Server) or owner (for GitHub)'),
+            OpenApiParameter(name='repo_slug', type=str, required=True, description='Repository slug/name'),
             OpenApiParameter(name='path', type=str, required=False),
             OpenApiParameter(name='branch', type=str, required=False),
             OpenApiParameter(name='recursive', type=bool, required=False),
@@ -205,16 +219,27 @@ class GitProviderViewSet(viewsets.ViewSet):
         responses={200: TreeEntrySerializer(many=True)},
         tags=['git-provider'],
     )
-    @action(detail=True, methods=['get'], url_path='tree')
-    def get_tree(self, request, pk=None):
+    @action(detail=False, methods=['get'], url_path='tree')
+    def get_tree(self, request):
         """Get directory tree."""
         try:
             provider = self._get_provider(request)
+            project_key = request.query_params.get('project_key')
+            repo_slug = request.query_params.get('repo_slug')
             path = request.query_params.get('path', '')
             branch = request.query_params.get('branch', 'main')
             recursive = request.query_params.get('recursive', 'false').lower() == 'true'
             
-            tree = provider.get_directory_tree(pk, path, branch, recursive)
+            if not project_key or not repo_slug:
+                return Response(
+                    {'error': 'project_key and repo_slug are required', 'code': 'MISSING_PARAMETERS'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Build repo_id in the format expected by providers
+            repo_id = f"{project_key}_{repo_slug}"
+            
+            tree = provider.get_directory_tree(repo_id, path, branch, recursive)
             return Response(tree)
         except ValueError as e:
             return Response(

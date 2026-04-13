@@ -49,7 +49,7 @@ class ServiceTokenViewSet(viewsets.ModelViewSet):
         tags=['service-tokens'],
     )
     def create(self, request):
-        """Create a new service token."""
+        """Create or update a service token."""
         serializer = ServiceTokenCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
@@ -61,26 +61,33 @@ class ServiceTokenViewSet(viewsets.ModelViewSet):
         header_name = serializer.validated_data.get('header_name')
         name = serializer.validated_data.get('name')
         
-        # Create the service token instance (not saved yet)
-        service_token = ServiceToken(
+        # Try to get existing token or create new one
+        service_token, created = ServiceToken.objects.get_or_create(
             user=request.user,
             service_type=service_type,
             base_url=base_url,
-            header_name=header_name,
-            name=name,
+            defaults={
+                'header_name': header_name,
+                'name': name,
+            }
         )
         
-        # Set encrypted fields BEFORE saving
+        # Update fields if token already existed
+        if not created:
+            service_token.header_name = header_name
+            service_token.name = name
+        
+        # Set encrypted fields
         if token:
             service_token.set_token(token)
-        else:
-            # Set empty token if not provided (required field)
+        elif created:
+            # Set empty token if not provided for new tokens
             service_token.set_token('')
             
         if username:
             service_token.set_username(username)
         
-        # Now save with all fields set
+        # Save with all fields set
         service_token.save()
         
         response_serializer = ServiceTokenSerializer(service_token)
