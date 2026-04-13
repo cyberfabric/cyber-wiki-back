@@ -65,18 +65,26 @@ class GitProviderFactory:
         
         # For Bitbucket Server, also fetch custom header token if available
         if service_token.service_type == ServiceType.BITBUCKET_SERVER:
+            logger.info(f"Looking for custom header token for user {service_token.user.username}")
             try:
-                # Custom header tokens typically have empty base_url (they're global)
-                custom_token = ServiceToken.objects.get(
+                # Custom header tokens are typically global (empty base_url)
+                # But user might have multiple, so prefer empty base_url first
+                all_custom_tokens = ServiceToken.objects.filter(
                     user=service_token.user,
-                    service_type=ServiceType.CUSTOM_HEADER,
-                    base_url=''
+                    service_type=ServiceType.CUSTOM_HEADER
                 )
-                custom_header = custom_token.get_token()
-                custom_header_name = custom_token.header_name
-                logger.info(f"Found custom header token: {custom_header_name} (length: {len(custom_header) if custom_header else 0})")
-            except ServiceToken.DoesNotExist:
-                logger.warning(f"No custom header token found for user {service_token.user.username}")
+                logger.info(f"Found {all_custom_tokens.count()} custom header token(s)")
+                
+                custom_token = all_custom_tokens.order_by('base_url').first()  # Empty string sorts first
+                
+                if custom_token:
+                    custom_header = custom_token.get_token()
+                    custom_header_name = custom_token.header_name
+                    logger.info(f"Using custom header token: {custom_header_name} (base_url: '{custom_token.base_url}', token length: {len(custom_header) if custom_header else 0})")
+                else:
+                    logger.warning(f"No custom header token found for user {service_token.user.username}")
+            except Exception as e:
+                logger.error(f"Error fetching custom header token: {e}", exc_info=True)
                 pass  # Custom header token not configured, continue without it
         
         return GitProviderFactory.create(

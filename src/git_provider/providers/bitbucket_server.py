@@ -16,6 +16,9 @@ class BitbucketServerProvider(BaseGitProvider):
     def __init__(self, base_url: str, token: str, username: Optional[str] = None, custom_header: Optional[str] = None, custom_header_token: Optional[str] = None):
         super().__init__(base_url, token, username)
         
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Set up headers
         self.headers = {
             'Content-Type': 'application/json',
@@ -24,6 +27,9 @@ class BitbucketServerProvider(BaseGitProvider):
         # Add custom header if provided (for additional authentication)
         if custom_header and custom_header_token:
             self.headers[custom_header] = custom_header_token
+            logger.info(f"BitbucketServerProvider initialized with custom header: {custom_header} (token length: {len(custom_header_token)})")
+        else:
+            logger.warning(f"BitbucketServerProvider initialized WITHOUT custom header (custom_header={custom_header}, token={'present' if custom_header_token else 'missing'})")
         
         # Cache for all repositories (to avoid re-fetching on pagination)
         self._all_repos_cache = None
