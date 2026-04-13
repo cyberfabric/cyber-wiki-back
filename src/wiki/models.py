@@ -11,6 +11,9 @@ class Space(models.Model):
     A Space is a container for Pages, similar to Confluence spaces.
     Each space is linked to a Git repository and has its own configuration.
     """
+    # Primary Key
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
     # Basic Information
     slug = models.SlugField(max_length=100, unique=True, db_index=True, help_text='URL-friendly identifier')
     name = models.CharField(max_length=200, help_text='Display name')
@@ -124,6 +127,7 @@ class Document(models.Model):
     """
     Document within a space, linked to Git repository content.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     unique_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     space = models.ForeignKey(Space, on_delete=models.CASCADE, related_name='documents')
     title = models.CharField(max_length=500, help_text='Document title')
@@ -150,6 +154,7 @@ class GitSyncConfig(models.Model):
     """
     Configuration for Git synchronization.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     class SyncDirection(models.TextChoices):
         PULL_ONLY = 'pull_only', 'Pull Only'
@@ -191,6 +196,7 @@ class Tag(models.Model):
     """
     Tag for categorizing documents.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     class TagType(models.TextChoices):
         AUTO = 'auto', 'Auto-generated'
@@ -218,6 +224,7 @@ class DocumentTag(models.Model):
     """
     Association between documents and tags with relevance scoring.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='document_tags')
     tag = models.ForeignKey(Tag, on_delete=models.CASCADE, related_name='document_tags')
     relevance_score = models.FloatField(default=1.0, help_text='TF-IDF or manual relevance score')
@@ -238,6 +245,7 @@ class DocumentLink(models.Model):
     """
     Links between documents for navigation and discovery.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     class LinkType(models.TextChoices):
         INTERNAL = 'internal', 'Internal Link'
@@ -265,6 +273,7 @@ class FileComment(models.Model):
     """
     Inline comment on source files with line anchoring.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     class AnchoringStatus(models.TextChoices):
         ANCHORED = 'anchored', 'Anchored'
@@ -300,6 +309,7 @@ class UserChange(models.Model):
     """
     Pending user changes for approval workflow.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     class ChangeStatus(models.TextChoices):
         PENDING = 'pending', 'Pending'
@@ -335,6 +345,7 @@ class SpacePermission(models.Model):
     """
     Defines user-specific permissions for a space.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     space = models.ForeignKey(
         Space,
         on_delete=models.CASCADE,
@@ -379,6 +390,7 @@ class SpaceConfiguration(models.Model):
     Stores configuration settings for a space.
     Uses JSON field for flexible schema.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     space = models.OneToOneField(
         Space,
         on_delete=models.CASCADE,
@@ -450,6 +462,7 @@ class SpaceShortcut(models.Model):
     User-defined shortcuts to pages within a space.
     Similar to Confluence space shortcuts.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     space = models.ForeignKey(
         Space,
         on_delete=models.CASCADE,
@@ -484,6 +497,7 @@ class UserSpacePreference(models.Model):
     """
     User-specific preferences for spaces (favorites, recent, etc.)
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -525,6 +539,7 @@ class SpaceAttribute(models.Model):
     Extended attributes for spaces using EAV pattern.
     Allows flexible addition of custom properties without schema changes.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     space = models.ForeignKey(
         Space,
         on_delete=models.CASCADE,

@@ -10,11 +10,11 @@ urlpatterns = [
     
     # API Tokens
     path('tokens', views.ApiTokenViewSet.as_view({'get': 'list', 'post': 'create'}), name='api-tokens'),
-    path('tokens/<int:pk>', views.ApiTokenViewSet.as_view({'delete': 'destroy'}), name='api-token-detail'),
+    path('tokens/<uuid:pk>', views.ApiTokenViewSet.as_view({'delete': 'destroy'}), name='api-token-detail'),
     
     # Favorites
     path('favorites', views.FavoriteRepositoryViewSet.as_view({'get': 'list', 'post': 'create'}), name='favorites'),
-    path('favorites/<int:pk>', views.FavoriteRepositoryViewSet.as_view({'delete': 'destroy'}), name='favorite-detail'),
+    path('favorites/<uuid:pk>', views.FavoriteRepositoryViewSet.as_view({'delete': 'destroy'}), name='favorite-detail'),
     
     # Recent repositories
     path('recent', views.RecentRepositoryViewSet.as_view({'get': 'list'}), name='recent-repositories'),

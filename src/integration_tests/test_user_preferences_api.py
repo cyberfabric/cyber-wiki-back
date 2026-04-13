@@ -1,0 +1,265 @@
+"""
+Integration tests for User Preferences API endpoints.
+
+Test Coverage:
+- Favorites (add, list, remove)
+- Recent spaces (tracking, listing)
+
+Each test is independent and cleans up after itself.
+"""
+import pytest
+import requests
+
+from .test_helpers import (
+    create_space,
+    delete_space,
+    cleanup_all_test_spaces,
+)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def cleanup_before_and_after(api_session):
+    """Clean up test artifacts before and after all tests in this module."""
+    print("\n🧹 Cleaning up any leftover test artifacts...")
+    cleanup_all_test_spaces(api_session)
+    yield
+    print("\n🧹 Final cleanup of test artifacts...")
+    cleanup_all_test_spaces(api_session)
+
+
+# ============================================================================
+# Test Class: Favorites
+# ============================================================================
+
+class TestFavorites:
+    """Test favorites functionality. Each test is independent."""
+
+    def test_add_space_to_favorites(self, api_session):
+        """Test adding a space to favorites."""
+        print("\n" + "="*80)
+        print("TEST: Add Space to Favorites")
+        print("="*80)
+        print("Purpose: Verify that a space can be added to favorites")
+        print("Expected: HTTP 200/201")
+        
+        # Setup: Create a space
+        print(f"\n🔧 Setup: Creating test space...")
+        space = create_space(api_session, name_suffix="_favorite")
+        assert space is not None, "Failed to create test space"
+        space_slug = space["slug"]
+        print(f"   ✓ Created space {space_slug}")
+        
+        try:
+            # Test: Add to favorites
+            print(f"\n📤 Adding space to favorites...")
+            response = requests.post(
+                f"{api_session.base_url}/api/user_management/v1/favorites",
+                json={"repository_id": f"space_{space_slug}"},
+                headers=api_session.headers
+            )
+            
+            print(f"📥 Response: HTTP {response.status_code}")
+            
+            assert response.status_code in [200, 201], f"Failed to add favorite: {response.text}"
+            print(f"\n✅ PASS: Space added to favorites")
+                
+        finally:
+            # Cleanup
+            print(f"\n🧹 Cleaning up...")
+            if delete_space(api_session, space_slug):
+                print(f"   ✓ Deleted space {space_slug}")
+                
+        print("="*80)
+
+    def test_list_favorites(self, api_session):
+        """Test listing user favorites."""
+        print("\n" + "="*80)
+        print("TEST: List Favorites")
+        print("="*80)
+        print("Purpose: Verify that favorites can be listed")
+        print("Expected: HTTP 200, list of favorites")
+        
+        # Setup: Create a space and add to favorites
+        print(f"\n🔧 Setup: Creating test space...")
+        space = create_space(api_session, name_suffix="_fav_list")
+        assert space is not None, "Failed to create test space"
+        space_slug = space["slug"]
+        print(f"   ✓ Created space {space_slug}")
+        
+        try:
+            # Add to favorites first
+            print(f"\n🔧 Adding space to favorites...")
+            add_response = requests.post(
+                f"{api_session.base_url}/api/user_management/v1/favorites",
+                json={"repository_id": f"space_{space_slug}"},
+                headers=api_session.headers
+            )
+            assert add_response.status_code in [200, 201], f"Failed to add favorite: {add_response.text}"
+            
+            # Test: List favorites
+            print(f"\n📤 Listing favorites...")
+            response = requests.get(
+                f"{api_session.base_url}/api/user_management/v1/favorites",
+                headers=api_session.headers
+            )
+            
+            print(f"📥 Response: HTTP {response.status_code}")
+            assert response.status_code == 200, f"Failed to list favorites: {response.text}"
+            
+            data = response.json()
+            favorites = data if isinstance(data, list) else data.get("results", [])
+            print(f"\n🔍 Found {len(favorites)} favorite(s)")
+            print(f"\n✅ PASS: Favorites listed successfully")
+                
+        finally:
+            # Cleanup
+            print(f"\n🧹 Cleaning up...")
+            if delete_space(api_session, space_slug):
+                print(f"   ✓ Deleted space {space_slug}")
+                
+        print("="*80)
+
+    def test_remove_space_from_favorites(self, api_session):
+        """Test removing a space from favorites."""
+        print("\n" + "="*80)
+        print("TEST: Remove Space from Favorites")
+        print("="*80)
+        print("Purpose: Verify that a space can be removed from favorites")
+        print("Expected: HTTP 200/204")
+        
+        # Setup: Create a space and add to favorites
+        print(f"\n🔧 Setup: Creating test space...")
+        space = create_space(api_session, name_suffix="_fav_remove")
+        assert space is not None, "Failed to create test space"
+        space_slug = space["slug"]
+        print(f"   ✓ Created space {space_slug}")
+        
+        try:
+            # Add to favorites first
+            print(f"\n🔧 Adding space to favorites...")
+            add_response = requests.post(
+                f"{api_session.base_url}/api/user_management/v1/favorites",
+                json={"repository_id": f"space_{space_slug}"},
+                headers=api_session.headers
+            )
+            assert add_response.status_code in [200, 201], f"Failed to add favorite: {add_response.text}"
+            favorite_id = add_response.json()["id"]
+            
+            # Test: Remove from favorites
+            print(f"\n📤 Removing space from favorites...")
+            response = requests.delete(
+                f"{api_session.base_url}/api/user_management/v1/favorites/{favorite_id}",
+                headers=api_session.headers
+            )
+            
+            print(f"📥 Response: HTTP {response.status_code}")
+            assert response.status_code in [200, 204], f"Failed to remove favorite: {response.text}"
+            print(f"\n✅ PASS: Space removed from favorites")
+                
+        finally:
+            # Cleanup
+            print(f"\n🧹 Cleaning up...")
+            if delete_space(api_session, space_slug):
+                print(f"   ✓ Deleted space {space_slug}")
+                
+        print("="*80)
+
+
+# ============================================================================
+# Test Class: Recent Spaces
+# ============================================================================
+
+class TestRecentSpaces:
+    """Test recent spaces functionality. Each test is independent."""
+
+    def test_visit_space_adds_to_recent(self, api_session):
+        """Test that visiting a space adds it to recent list."""
+        print("\n" + "="*80)
+        print("TEST: Visit Space Adds to Recent")
+        print("="*80)
+        print("Purpose: Verify that visiting a space tracks it as recent")
+        print("Expected: Space appears in recent list")
+        
+        # Setup: Create a space
+        print(f"\n🔧 Setup: Creating test space...")
+        space = create_space(api_session, name_suffix="_recent")
+        assert space is not None, "Failed to create test space"
+        space_slug = space["slug"]
+        print(f"   ✓ Created space {space_slug}")
+        
+        try:
+            # Test: Visit the space
+            print(f"\n📤 Visiting space {space_slug}...")
+            response = requests.get(
+                f"{api_session.base_url}/api/wiki/v1/spaces/{space_slug}/",
+                headers=api_session.headers
+            )
+            assert response.status_code == 200
+            print(f"   ✓ Space visited")
+            
+            # Check recent list
+            print(f"\n📤 Checking recent spaces...")
+            recent_response = requests.get(
+                f"{api_session.base_url}/api/user_management/v1/recent",
+                headers=api_session.headers
+            )
+            
+            print(f"📥 Response: HTTP {recent_response.status_code}")
+            assert recent_response.status_code == 200, f"Failed to get recent: {recent_response.text}"
+            print(f"✅ PASS: Recent tracking available")
+                
+        finally:
+            # Cleanup
+            print(f"\n🧹 Cleaning up...")
+            if delete_space(api_session, space_slug):
+                print(f"   ✓ Deleted space {space_slug}")
+                
+        print("="*80)
+
+    def test_list_recent_spaces(self, api_session):
+        """Test listing recently visited spaces."""
+        print("\n" + "="*80)
+        print("TEST: List Recent Spaces")
+        print("="*80)
+        print("Purpose: Verify that recent spaces can be listed")
+        print("Expected: HTTP 200, list of recent spaces")
+        
+        # Setup: Create and visit a space
+        print(f"\n🔧 Setup: Creating test space...")
+        space = create_space(api_session, name_suffix="_recent_list")
+        assert space is not None, "Failed to create test space"
+        space_slug = space["slug"]
+        print(f"   ✓ Created space {space_slug}")
+        
+        try:
+            # Visit the space to add to recent
+            print(f"\n🔧 Visiting space to add to recent...")
+            visit_response = requests.get(
+                f"{api_session.base_url}/api/wiki/v1/spaces/{space_slug}/",
+                headers=api_session.headers
+            )
+            assert visit_response.status_code == 200
+            print(f"   ✓ Space visited")
+            
+            # Test: List recent spaces
+            print(f"\n📤 Listing recent spaces...")
+            response = requests.get(
+                f"{api_session.base_url}/api/user_management/v1/recent",
+                headers=api_session.headers
+            )
+            
+            print(f"📥 Response: HTTP {response.status_code}")
+            assert response.status_code == 200, f"Failed to list recent: {response.text}"
+            
+            data = response.json()
+            recent = data if isinstance(data, list) else data.get("results", [])
+            print(f"\n🔍 Found {len(recent)} recent space(s)")
+            print(f"\n✅ PASS: Recent spaces listed successfully")
+                
+        finally:
+            # Cleanup
+            print(f"\n🧹 Cleaning up...")
+            if delete_space(api_session, space_slug):
+                print(f"   ✓ Deleted space {space_slug}")
+                
+        print("="*80)

@@ -1,3 +1,4 @@
+import uuid
 from django.db import models
 from django.contrib.auth.models import User
 import secrets
@@ -18,6 +19,7 @@ class UserProfile(models.Model):
     
     Stores user preferences, SSO information, and role-based permissions.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='userprofile')
     role = models.CharField(
         max_length=20,
@@ -48,6 +50,7 @@ class ApiToken(models.Model):
     
     Allows users to create named tokens for programmatic API access.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='api_tokens')
     name = models.CharField(
         max_length=255,
@@ -81,6 +84,7 @@ class FavoriteRepository(models.Model):
     """
     User's favorite repositories for quick access.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='favorite_repositories')
     repository_id = models.CharField(
         max_length=255,
@@ -102,6 +106,7 @@ class RecentRepository(models.Model):
     """
     Recently viewed repositories for each user.
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='recent_repositories')
     repository_id = models.CharField(max_length=255)
     last_viewed_at = models.DateTimeField(auto_now=True)
@@ -121,6 +126,7 @@ class RepositoryViewMode(models.Model):
     """
     Per-repository view mode preference (Developer vs Document mode).
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     class ViewMode(models.TextChoices):
         DEVELOPER = 'developer', 'Developer Mode'  # Raw file tree
@@ -151,6 +157,7 @@ class RepositorySettings(models.Model):
     
     @cpt-cyberwiki-fr-document-index
     """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='repository_settings')
     repository_id = models.CharField(max_length=255, help_text='Repository identifier')
     provider = models.CharField(max_length=50, help_text='Git provider (github, bitbucket_server, etc.)')

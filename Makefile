@@ -31,6 +31,18 @@ coverage-open:  ## Run coverage and open HTML report
 test-module:  ## Run tests for specific module (usage: make test-module MODULE=users)
 	pytest src/$(MODULE)/tests/ -v
 
+test-integration:  ## Run integration tests
+	pytest src/integration_tests/ -v
+
+test-integration-fast:  ## Run integration tests in parallel
+	pytest src/integration_tests/ -n auto
+
+test-integration-coverage:  ## Run integration tests with coverage
+	pytest src/integration_tests/ --cov=src --cov-report=html --cov-report=term-missing
+
+test-all:  ## Run all tests (unit + integration)
+	pytest -v
+
 clean:  ## Clean up generated files
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name '*.pyc' -delete

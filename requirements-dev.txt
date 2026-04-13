@@ -24,4 +24,5 @@ ipdb==0.13.13
 django-debug-toolbar==4.3.0
 
 # API Testing
+requests==2.31.0  # For integration tests against live server
 requests-mock==1.11.0

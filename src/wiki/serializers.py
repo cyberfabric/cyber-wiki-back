@@ -55,6 +55,9 @@ class SpaceDetailSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
     
     def update(self, instance, validated_data):
+        # Remove slug from validated_data to prevent updates (slug is immutable)
+        validated_data.pop('slug', None)
+        
         git_repository_url = validated_data.pop('git_repository_url', None)
         git_provider = validated_data.get('git_provider', instance.git_provider)
         
