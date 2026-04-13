@@ -188,25 +188,35 @@ class TestRecentSpaces:
         print(f"   ✓ Created space {space_slug}")
         
         try:
-            # Test: Visit the space
-            print(f"\n📤 Visiting space {space_slug}...")
-            response = requests.get(
-                f"{api_session.base_url}/api/wiki/v1/spaces/{space_slug}/",
+            # Test: Mark space as visited
+            print(f"\n📤 Marking space as visited...")
+            response = requests.post(
+                f"{api_session.base_url}/api/wiki/v1/preferences/visited/{space_slug}/",
                 headers=api_session.headers
             )
-            assert response.status_code == 200
-            print(f"   ✓ Space visited")
+            print(f"📥 Response: HTTP {response.status_code}")
+            assert response.status_code == 200, f"Failed to mark visited: {response.text}"
+            print(f"   ✓ Space marked as visited")
             
             # Check recent list
             print(f"\n📤 Checking recent spaces...")
             recent_response = requests.get(
-                f"{api_session.base_url}/api/user_management/v1/recent",
+                f"{api_session.base_url}/api/wiki/v1/preferences/recent/",
                 headers=api_session.headers
             )
             
             print(f"📥 Response: HTTP {recent_response.status_code}")
             assert recent_response.status_code == 200, f"Failed to get recent: {recent_response.text}"
-            print(f"✅ PASS: Recent tracking available")
+            
+            data = recent_response.json()
+            recent = data if isinstance(data, list) else data.get("results", [])
+            print(f"\n🔍 Found {len(recent)} recent space(s)")
+            
+            # Verify our space is in the recent list
+            space_slugs = [r.get('space_slug') for r in recent]
+            assert space_slug in space_slugs, f"Space {space_slug} not found in recent list. Found: {space_slugs}"
+            print(f"   ✓ Space {space_slug} found in recent list")
+            print(f"✅ PASS: Recent tracking working correctly")
                 
         finally:
             # Cleanup
@@ -232,19 +242,19 @@ class TestRecentSpaces:
         print(f"   ✓ Created space {space_slug}")
         
         try:
-            # Visit the space to add to recent
-            print(f"\n🔧 Visiting space to add to recent...")
-            visit_response = requests.get(
-                f"{api_session.base_url}/api/wiki/v1/spaces/{space_slug}/",
+            # Mark space as visited to add to recent
+            print(f"\n🔧 Marking space as visited...")
+            visit_response = requests.post(
+                f"{api_session.base_url}/api/wiki/v1/preferences/visited/{space_slug}/",
                 headers=api_session.headers
             )
-            assert visit_response.status_code == 200
-            print(f"   ✓ Space visited")
+            assert visit_response.status_code == 200, f"Failed to mark visited: {visit_response.text}"
+            print(f"   ✓ Space marked as visited")
             
             # Test: List recent spaces
             print(f"\n📤 Listing recent spaces...")
             response = requests.get(
-                f"{api_session.base_url}/api/user_management/v1/recent",
+                f"{api_session.base_url}/api/wiki/v1/preferences/recent/",
                 headers=api_session.headers
             )
             
@@ -254,6 +264,11 @@ class TestRecentSpaces:
             data = response.json()
             recent = data if isinstance(data, list) else data.get("results", [])
             print(f"\n🔍 Found {len(recent)} recent space(s)")
+            
+            # Verify our space is in the list
+            space_slugs = [r.get('space_slug') for r in recent]
+            assert space_slug in space_slugs, f"Space {space_slug} not found in recent list. Found: {space_slugs}"
+            print(f"   ✓ Space {space_slug} found in recent list")
             print(f"\n✅ PASS: Recent spaces listed successfully")
                 
         finally:

@@ -12,15 +12,20 @@ class ServiceTokenSerializer(serializers.ModelSerializer):
         model = ServiceToken
         fields = [
             'id', 'service_type', 'base_url', 'username', 'header_name', 
-            'name', 'created_at', 'updated_at'
+            'name', 'has_token', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     username = serializers.SerializerMethodField()
+    has_token = serializers.SerializerMethodField()
     
     def get_username(self, obj):
         """Return decrypted username."""
         return obj.get_username()
+    
+    def get_has_token(self, obj):
+        """Return whether token is configured (without exposing the actual token)."""
+        return bool(obj.encrypted_token)
 
 
 class ServiceTokenCreateSerializer(serializers.Serializer):
