@@ -54,6 +54,15 @@ class EnrichmentRegistry:
                 return provider
         return None
     
+    def get_enrichment_types(self) -> List[str]:
+        """
+        Get list of all available enrichment types.
+        
+        Returns:
+            List of enrichment type strings
+        """
+        return [provider.get_enrichment_type() for provider in self._providers]
+    
     def get_all_enrichments(self, source_uri: str, user) -> Dict[str, List[Dict[str, Any]]]:
         """
         Get enrichments from all providers for a source URI.
