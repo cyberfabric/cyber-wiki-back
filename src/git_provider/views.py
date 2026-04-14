@@ -393,7 +393,7 @@ def get_file(self, request):
             OpenApiParameter(name='provider', type=str, required=True),
             OpenApiParameter(name='base_url', type=str, required=True),
             OpenApiParameter(name='repo_id', type=str, required=True, location=OpenApiParameter.PATH),
-            OpenApiParameter(name='state', type=str, required=False),
+            OpenApiParameter(name='state', type=str, required=False, description='PR state (open, closed, merged)'),
             OpenApiParameter(name='page', type=int, required=False),
             OpenApiParameter(name='per_page', type=int, required=False),
         ],

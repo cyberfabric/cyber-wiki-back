@@ -62,15 +62,82 @@ class BitbucketServerProvider(BaseGitProvider):
         return 'bitbucket_server'
     
     def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
-        """Make HTTP request to Bitbucket Server API."""
+        """Make HTTP request to Bitbucket Server API with caching."""
+        from users.cache import get_cache
+        from django.contrib.auth.models import User
+        import logging
+        import json
+        
+        logger = logging.getLogger(__name__)
         url = f"{self.base_url}/rest/api/1.0{endpoint}"
         
         # Use HTTP Basic Auth for Bitbucket Server (username:token)
         if self.username:
             kwargs['auth'] = (self.username, self.token)
         
+        # Try to get current user from thread-local storage (set by middleware)
+        user = None
+        try:
+            from threading import current_thread
+            user = getattr(current_thread(), 'user', None)
+            if user:
+                logger.debug(f"[Cache] Got user from thread: {user.username if hasattr(user, 'username') else 'anonymous'}")
+        except Exception as e:
+            logger.debug(f"[Cache] Failed to get user from thread: {e}")
+        
+        # Only cache for authenticated users with cache enabled
+        if user and user.is_authenticated and method == 'GET':
+            cache = get_cache(user)
+            logger.debug(f"[Cache] Cache enabled: {cache.is_enabled()} for user {user.username}")
+            if cache.is_enabled():
+                # Build cache key from endpoint and params
+                params = kwargs.get('params', {})
+                cached = cache.get(
+                    provider_type='bitbucket_server',
+                    provider_id=self.base_url,
+                    endpoint=endpoint,
+                    params=params,
+                    method=method
+                )
+                
+                if cached:
+                    # Return a mock response object with cached data
+                    class CachedResponse:
+                        def __init__(self, data, status_code=200):
+                            self._data = data
+                            self.status_code = status_code
+                            self.text = json.dumps(data)
+                        
+                        def json(self):
+                            return self._data
+                        
+                        def raise_for_status(self):
+                            pass
+                    
+                    return CachedResponse(cached['data'], cached['status_code'])
+        
+        # Make actual request
         response = requests.request(method, url, headers=self.headers, **kwargs)
         response.raise_for_status()
+        
+        # Cache successful GET responses
+        if user and user.is_authenticated and method == 'GET' and 200 <= response.status_code < 300:
+            cache = get_cache(user)
+            if cache.is_enabled():
+                try:
+                    params = kwargs.get('params', {})
+                    cache.set(
+                        provider_type='bitbucket_server',
+                        provider_id=self.base_url,
+                        endpoint=endpoint,
+                        params=params,
+                        response_data=response.json(),
+                        status_code=response.status_code,
+                        method=method
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to cache external API response: {e}")
+        
         return response
     
     def list_projects(self, page: int = 1, per_page: int = 100) -> Dict[str, Any]:
@@ -235,20 +302,68 @@ class BitbucketServerProvider(BaseGitProvider):
         response = self._request('GET', f'/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_number}')
         return self._normalize_pr(response.json())
     
+    def get_pull_request_files(self, repo_id: str, pr_number: int) -> List[str]:
+        """Get list of files changed in a pull request."""
+        project_key, repo_slug = repo_id.split('_', 1)
+        response = self._request('GET', f'/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_number}/diff')
+        
+        if not response:
+            return []
+        
+        try:
+            data = response.json()
+        except Exception:
+            return []
+            
+        if not data:
+            return []
+            
+        diffs = data.get('diffs', [])
+        
+        files = []
+        for diff in diffs:
+            if not diff:
+                continue
+                
+            # Get both source and destination paths
+            source = diff.get('source')
+            dest = diff.get('destination')
+            
+            source_path = source.get('toString', '') if source else ''
+            dest_path = dest.get('toString', '') if dest else ''
+            
+            # Add non-empty paths
+            if source_path:
+                files.append(source_path)
+            if dest_path and dest_path != source_path:
+                files.append(dest_path)
+        
+        return list(set(files))  # Remove duplicates
+    
     def get_pull_request_diff(self, repo_id: str, pr_number: int) -> str:
         """Get pull request diff."""
         project_key, repo_slug = repo_id.split('_', 1)
         response = self._request('GET', f'/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_number}/diff')
         
+        if not response:
+            return ''
+        
         # Bitbucket returns diff in a structured format
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception:
+            return ''
+            
+        if not data:
+            return ''
+            
         diffs = data.get('diffs', [])
         
         # Convert to unified diff format
         diff_text = []
         for diff in diffs:
-            source = diff.get('source', {})
-            destination = diff.get('destination', {})
+            source = diff.get('source') or {}
+            destination = diff.get('destination') or {}
             diff_text.append(f"--- {source.get('toString', '')}")
             diff_text.append(f"+++ {destination.get('toString', '')}")
             
