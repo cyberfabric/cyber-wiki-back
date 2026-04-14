@@ -88,6 +88,9 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
                     if file_is_modified:
                         # Parse diff to extract hunks for this file
                         logger.debug(f"[PR] Parsing diff for file: {address.path}, diff length: {len(diff_text)} chars")
+                        # Show first few lines of diff to understand format
+                        diff_lines = diff_text.split('\n')[:10]
+                        logger.debug(f"[PR] First 10 lines of diff:\n" + '\n'.join(diff_lines))
                         hunks = self._parse_diff_hunks(diff_text, address.path)
                         logger.debug(f"[PR] Found {len(hunks)} hunks for PR #{pr['number']}")
                         
@@ -142,19 +145,34 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
         hunks = []
         in_file = False
         current_hunk = None
+        file_marker_count = 0
         
         for line in diff_text.split('\n'):
             # Check if we're entering the section for our file
+            # Git diff format: --- a/path/to/file or +++ b/path/to/file or --- path/to/file
             if line.startswith('---') or line.startswith('+++'):
-                if file_path in line:
+                file_marker_count += 1
+                # Extract filename from diff marker (handle a/ and b/ prefixes)
+                # Examples: "--- a/README.md", "+++ b/README.md", "--- README.md", "--- tools/README.md"
+                marker_file = line[4:].strip()  # Remove "--- " or "+++ "
+                if marker_file.startswith('a/') or marker_file.startswith('b/'):
+                    marker_file = marker_file[2:]  # Remove a/ or b/ prefix
+                
+                # Match only if exact match
+                # file_path from source_uri is the full path (e.g., "tools/standctl/.trufflehog3.yml" or ".trufflehog3.yml")
+                is_match = (marker_file == file_path)
+                
+                if is_match:
                     in_file = True
-                    logger.debug(f"[PR] Matched our file: {line}")
-                else:
+                    logger.debug(f"[PR] Matched our file: {line} (looking for: {file_path})")
+                elif marker_file:  # Only exit if we see a non-empty different file
+                    # We're entering a different file's section
                     in_file = False
                 continue
             
             # Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
             if in_file and line.startswith('@@'):
+                logger.debug(f"[PR] Found hunk header while in_file=True: {line}")
                 if current_hunk:
                     hunks.append(current_hunk)
                 
@@ -183,6 +201,10 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
         # Don't forget the last hunk
         if current_hunk:
             hunks.append(current_hunk)
+        
+        logger.debug(f"[PR] Found {len(hunks)} hunks for file {file_path} (file_markers: {file_marker_count}, in_file: {in_file})")
+        if len(hunks) == 0 and file_marker_count > 0:
+            logger.warning(f"[PR] No hunks found but saw {file_marker_count} file markers. File path might not match. Looking for: {file_path}")
         
         return hunks
     

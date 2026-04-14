@@ -12,7 +12,7 @@ class BaseGitProvider(ABC):
     All Git providers (GitHub, Bitbucket Server, etc.) must implement this interface.
     """
     
-    def __init__(self, base_url: str, token: str, username: Optional[str] = None):
+    def __init__(self, base_url: str, token: str, username: Optional[str] = None, user=None):
         """
         Initialize the Git provider.
         
@@ -20,10 +20,12 @@ class BaseGitProvider(ABC):
             base_url: Base URL for the Git provider API
             token: Access token for authentication
             username: Username (required for some providers like Bitbucket Server)
+            user: Django user instance for caching (optional)
         """
         self.base_url = base_url
         self.token = token
         self.username = username
+        self.user = user  # Store user for caching
     
     @property
     def capabilities(self) -> Dict[str, bool]:

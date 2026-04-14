@@ -15,7 +15,7 @@ class GitProviderFactory:
     """
     
     @staticmethod
-    def create(provider: str, base_url: str, token: str, username: Optional[str] = None, custom_header: Optional[str] = None, custom_header_token: Optional[str] = None) -> BaseGitProvider:
+    def create(provider: str, base_url: str, token: str, username: Optional[str] = None, custom_header: Optional[str] = None, custom_header_token: Optional[str] = None, user=None) -> BaseGitProvider:
         """
         Create a Git provider instance.
         
@@ -26,6 +26,7 @@ class GitProviderFactory:
             username: Username (required for Bitbucket Server)
             custom_header: Custom header name for authentication (e.g., 'X-Custom-Token')
             custom_header_token: Token value for custom header
+            user: Django user instance for caching (optional)
         
         Returns:
             BaseGitProvider instance
@@ -34,14 +35,14 @@ class GitProviderFactory:
             ValueError: If provider type is not supported
         """
         if provider == ServiceType.GITHUB:
-            return GitHubProvider(base_url=base_url, token=token, username=username)
+            return GitHubProvider(base_url=base_url, token=token, username=username, user=user)
         elif provider == ServiceType.BITBUCKET_SERVER:
             if not username:
                 raise ValueError("Username is required for Bitbucket Server")
-            return BitbucketServerProvider(base_url=base_url, token=token, username=username, custom_header=custom_header, custom_header_token=custom_header_token)
+            return BitbucketServerProvider(base_url=base_url, token=token, username=username, custom_header=custom_header, custom_header_token=custom_header_token, user=user)
         elif provider == 'local_git':
             # For local Git, base_url is the filesystem path
-            return LocalGitProvider(base_path=base_url, token=token, username=username)
+            return LocalGitProvider(base_path=base_url, token=token, username=username, user=user)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
     
@@ -95,5 +96,6 @@ class GitProviderFactory:
             token=service_token.get_token(),
             username=service_token.get_username(),
             custom_header=custom_header_name,
-            custom_header_token=custom_header
+            custom_header_token=custom_header,
+            user=service_token.user  # Pass user for caching
         )

@@ -13,8 +13,8 @@ class BitbucketServerProvider(BaseGitProvider):
     Documentation: https://docs.atlassian.com/bitbucket-server/rest/
     """
     
-    def __init__(self, base_url: str, token: str, username: Optional[str] = None, custom_header: Optional[str] = None, custom_header_token: Optional[str] = None):
-        super().__init__(base_url, token, username)
+    def __init__(self, base_url: str, token: str, username: Optional[str] = None, custom_header: Optional[str] = None, custom_header_token: Optional[str] = None, user=None):
+        super().__init__(base_url, token, username, user)
         
         import logging
         logger = logging.getLogger(__name__)
@@ -75,15 +75,19 @@ class BitbucketServerProvider(BaseGitProvider):
         if self.username:
             kwargs['auth'] = (self.username, self.token)
         
-        # Try to get current user from thread-local storage (set by middleware)
-        user = None
-        try:
-            from threading import current_thread
-            user = getattr(current_thread(), 'user', None)
-            if user:
-                logger.debug(f"[Cache] Got user from thread: {user.username if hasattr(user, 'username') else 'anonymous'}")
-        except Exception as e:
-            logger.debug(f"[Cache] Failed to get user from thread: {e}")
+        # Get user from instance or thread-local storage
+        user = self.user
+        if not user:
+            try:
+                from threading import current_thread
+                user = getattr(current_thread(), 'user', None)
+            except Exception as e:
+                logger.debug(f"[Cache] Failed to get user from thread: {e}")
+        
+        if user:
+            logger.debug(f"[Cache] Got user: {user.username if hasattr(user, 'username') else 'anonymous'}, is_authenticated: {user.is_authenticated if hasattr(user, 'is_authenticated') else 'N/A'}")
+        else:
+            logger.debug(f"[Cache] No user available for {method} {endpoint}")
         
         # Only cache for authenticated users with cache enabled
         if user and user.is_authenticated and method == 'GET':
@@ -303,34 +307,55 @@ class BitbucketServerProvider(BaseGitProvider):
         return self._normalize_pr(response.json())
     
     def get_pull_request_files(self, repo_id: str, pr_number: int) -> List[str]:
-        """Get list of files changed in a pull request."""
+        """Get list of files changed in a pull request with pagination support."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         project_key, repo_slug = repo_id.split('_', 1)
-        response = self._request('GET', f'/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_number}/diff')
         
-        if not response:
-            return []
+        # Bitbucket diff API is paginated - fetch all pages
+        all_diffs = []
+        start = 0
+        limit = 500  # Max diffs per page
         
-        try:
-            data = response.json()
-        except Exception:
-            return []
+        while True:
+            response = self._request('GET', f'/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_number}/diff', params={
+                'start': start,
+                'limit': limit,
+            })
             
-        if not data:
-            return []
+            if not response:
+                break
             
-        diffs = data.get('diffs', [])
+            try:
+                data = response.json()
+            except Exception:
+                break
+                
+            if not data:
+                break
+                
+            diffs = data.get('diffs', [])
+            all_diffs.extend(diffs)
+            
+            # Check if there are more pages
+            is_last_page = data.get('isLastPage', True)
+            if is_last_page:
+                break
+            
+            # Move to next page
+            start += limit
         
         files = []
-        for diff in diffs:
+        for diff in all_diffs:
             if not diff:
                 continue
-                
-            # Get both source and destination paths
-            source = diff.get('source')
-            dest = diff.get('destination')
             
-            source_path = source.get('toString', '') if source else ''
-            dest_path = dest.get('toString', '') if dest else ''
+            source = diff.get('source') or {}
+            destination = diff.get('destination') or {}
+            
+            source_path = source.get('toString', '')
+            dest_path = destination.get('toString', '')
             
             # Add non-empty paths
             if source_path:
@@ -341,36 +366,77 @@ class BitbucketServerProvider(BaseGitProvider):
         return list(set(files))  # Remove duplicates
     
     def get_pull_request_diff(self, repo_id: str, pr_number: int) -> str:
-        """Get pull request diff."""
+        """Get pull request diff with pagination support."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         project_key, repo_slug = repo_id.split('_', 1)
-        response = self._request('GET', f'/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_number}/diff')
         
-        if not response:
-            return ''
+        # Bitbucket diff API is paginated - fetch all pages
+        all_diffs = []
+        start = 0
+        limit = 500  # Max diffs per page
         
-        # Bitbucket returns diff in a structured format
-        try:
-            data = response.json()
-        except Exception:
-            return ''
+        while True:
+            response = self._request('GET', f'/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_number}/diff', params={
+                'start': start,
+                'limit': limit,
+            })
             
-        if not data:
-            return ''
+            if not response:
+                break
             
-        diffs = data.get('diffs', [])
+            # Bitbucket returns diff in a structured format
+            try:
+                data = response.json()
+            except Exception:
+                break
+                
+            if not data:
+                break
+                
+            diffs = data.get('diffs', [])
+            all_diffs.extend(diffs)
+            
+            # Check if there are more pages
+            is_last_page = data.get('isLastPage', True)
+            if is_last_page:
+                break
+            
+            # Move to next page
+            start += limit
+            logger.debug(f"[Bitbucket] Fetching next page of diffs for PR #{pr_number}, start={start}")
+        
+        logger.debug(f"[Bitbucket] Fetched {len(all_diffs)} diffs for PR #{pr_number}")
         
         # Convert to unified diff format
         diff_text = []
-        for diff in diffs:
+        for diff in all_diffs:
             source = diff.get('source') or {}
             destination = diff.get('destination') or {}
             diff_text.append(f"--- {source.get('toString', '')}")
             diff_text.append(f"+++ {destination.get('toString', '')}")
             
             for hunk in diff.get('hunks', []):
+                # Add hunk header: @@ -old_start,old_count +new_start,new_count @@
+                source_line = hunk.get('sourceLine', 0)
+                source_span = hunk.get('sourceSpan', 0)
+                dest_line = hunk.get('destinationLine', 0)
+                dest_span = hunk.get('destinationSpan', 0)
+                diff_text.append(f"@@ -{source_line},{source_span} +{dest_line},{dest_span} @@")
+                
                 for segment in hunk.get('segments', []):
+                    segment_type = segment.get('type', 'CONTEXT')
+                    # Determine prefix based on segment type
+                    if segment_type == 'ADDED':
+                        prefix = '+'
+                    elif segment_type == 'REMOVED':
+                        prefix = '-'
+                    else:  # CONTEXT
+                        prefix = ' '
+                    
                     for line in segment.get('lines', []):
-                        diff_text.append(line.get('line', ''))
+                        diff_text.append(prefix + line.get('line', ''))
         
         return '\n'.join(diff_text)
     
