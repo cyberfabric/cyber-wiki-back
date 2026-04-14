@@ -178,3 +178,93 @@ class RepositorySettings(models.Model):
     
     def __str__(self):
         return f"{self.user.username} - {self.repository_id}"
+
+
+class APIResponseCache(models.Model):
+    """
+    Cached API response with time-based invalidation.
+    
+    Stores responses keyed by provider, endpoint, and parameters.
+    Used for development caching to work offline or reduce API calls.
+    """
+    import hashlib
+    import json
+    
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='api_cache',
+        help_text='User who made the request'
+    )
+    
+    # Request identification
+    provider_type = models.CharField(
+        max_length=50,
+        help_text='Provider type (github, bitbucket_server, etc.)'
+    )
+    
+    provider_id = models.CharField(
+        max_length=255,
+        help_text='Provider identifier (e.g., github.com, bitbucket.example.com)'
+    )
+    
+    endpoint = models.CharField(
+        max_length=500,
+        help_text='API endpoint path'
+    )
+    
+    method = models.CharField(
+        max_length=10,
+        default='GET',
+        help_text='HTTP method'
+    )
+    
+    # Parameters for cache key
+    params_hash = models.CharField(
+        max_length=64,
+        help_text='SHA256 hash of request parameters'
+    )
+    
+    params_json = models.JSONField(
+        default=dict,
+        help_text='Request parameters (repo, branch, file path, etc.)'
+    )
+    
+    # Cached response
+    response_data = models.JSONField(
+        help_text='Cached response data'
+    )
+    
+    status_code = models.IntegerField(
+        default=200,
+        help_text='HTTP status code'
+    )
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    hit_count = models.IntegerField(
+        default=0,
+        help_text='Number of times this cache entry was used'
+    )
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'provider_type', 'provider_id', 'endpoint', 'params_hash']),
+            models.Index(fields=['user', 'created_at']),
+        ]
+        unique_together = ['user', 'provider_type', 'provider_id', 'endpoint', 'method', 'params_hash']
+        verbose_name = 'API Response Cache'
+        verbose_name_plural = 'API Response Caches'
+    
+    def __str__(self):
+        return f"{self.provider_type}:{self.endpoint} ({self.params_hash[:8]})"
+    
+    @staticmethod
+    def compute_params_hash(params: dict) -> str:
+        """Compute SHA256 hash of parameters for cache key."""
+        import hashlib
+        import json
+        # Sort keys for consistent hashing
+        sorted_params = json.dumps(params, sort_keys=True)
+        return hashlib.sha256(sorted_params.encode()).hexdigest()
