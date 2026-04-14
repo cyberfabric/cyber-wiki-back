@@ -2,11 +2,13 @@
 URL routing for wiki endpoints.
 """
 from rest_framework.routers import DefaultRouter
+from django.urls import path, include
 from . import space_views
 from .views_comments import FileCommentViewSet
 from .views_user_changes import UserChangeViewSet
 from .views_tags import TagViewSet, DocumentTagViewSet
 from .views_links import DocumentLinkViewSet
+from .views_file_mapping import FileMappingViewSet
 
 router = DefaultRouter()
 
@@ -21,4 +23,10 @@ router.register(r'tags', TagViewSet, basename='tag')
 router.register(r'document-tags', DocumentTagViewSet, basename='document-tag')
 router.register(r'links', DocumentLinkViewSet, basename='link')
 
-urlpatterns = router.urls
+# Nested routes for file mappings under spaces
+file_mapping_router = DefaultRouter()
+file_mapping_router.register(r'file-mappings', FileMappingViewSet, basename='file-mapping')
+
+urlpatterns = router.urls + [
+    path('spaces/<slug:space_slug>/', include(file_mapping_router.urls)),
+]

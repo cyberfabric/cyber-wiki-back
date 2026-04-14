@@ -4,7 +4,8 @@ Serializers for wiki models.
 from rest_framework import serializers
 from .models import (
     Space, Document, FileComment, UserChange, Tag, DocumentTag, DocumentLink, GitSyncConfig,
-    SpacePermission, SpaceConfiguration, SpaceShortcut, UserSpacePreference, SpaceAttribute
+    SpacePermission, SpaceConfiguration, SpaceShortcut, UserSpacePreference, SpaceAttribute,
+    FileMapping
 )
 
 
@@ -23,6 +24,7 @@ class SpaceDetailSerializer(serializers.ModelSerializer):
             'git_provider', 'git_base_url', 'git_project_key',
             'git_repository_id', 'git_repository_name', 'git_default_branch',
             'git_repository_url',
+            'default_display_name_source', 'filters',
             'page_count',
             'created_by', 'created_by_username',
             'created_at', 'updated_at', 'last_synced_at'
@@ -340,3 +342,43 @@ class SpaceAttributeSerializer(serializers.ModelSerializer):
                 "At least one value field (field_value_str, field_value_int, or field_value_float) must be provided"
             )
         return data
+
+
+class FileMappingSerializer(serializers.ModelSerializer):
+    """Serializer for FileMapping model."""
+    space_slug = serializers.CharField(source='space.slug', read_only=True)
+    effective_display_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = FileMapping
+        fields = [
+            'id', 'space', 'space_slug', 'file_path', 'is_folder',
+            'is_visible', 'display_name', 'display_name_source',
+            'extracted_name', 'extracted_at', 'effective_display_name',
+            'sort_order', 'icon', 'apply_to_children', 'parent_rule',
+            'is_override', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'space_slug', 'extracted_at', 'created_at', 'updated_at']
+    
+    def get_effective_display_name(self, obj):
+        """Get the effective display name."""
+        return obj.get_display_name()
+
+
+class FileMappingCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating/updating file mappings."""
+    
+    class Meta:
+        model = FileMapping
+        fields = [
+            'file_path', 'is_folder', 'is_visible',
+            'display_name', 'display_name_source',
+            'sort_order', 'icon', 'apply_to_children', 'is_override'
+        ]
+    
+    def validate_file_path(self, value):
+        """Ensure folder paths end with /."""
+        is_folder = self.initial_data.get('is_folder', False)
+        if is_folder and not value.endswith('/'):
+            return value + '/'
+        return value

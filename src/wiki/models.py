@@ -95,6 +95,25 @@ class Space(models.Model):
         help_text='Default Git branch (auto-detected if empty)'
     )
     
+    # File Mapping Configuration
+    filters = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='File extension/pattern filters (e.g., [".md", ".xml"])'
+    )
+    default_display_name_source = models.CharField(
+        max_length=50,
+        default='first_h1',
+        choices=[
+            ('first_h1', 'First H1'),
+            ('first_h2', 'First H2'),
+            ('title_frontmatter', 'Title from Frontmatter'),
+            ('filename', 'Filename'),
+            ('custom', 'Custom'),
+        ],
+        help_text='Default display name source for all files in this space'
+    )
+    
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -615,3 +634,200 @@ class SpaceAttribute(models.Model):
         elif self.field_value_float is not None:
             return self.field_value_float
         return None
+
+
+class FileMapping(models.Model):
+    """
+    Maps repository files to human-readable names for Documents mode.
+    Supports folder rules with inheritance and file-level overrides.
+    """
+    # Primary Key
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Space relationship
+    space = models.ForeignKey(
+        Space,
+        on_delete=models.CASCADE,
+        related_name='file_mappings'
+    )
+    
+    # File identification
+    file_path = models.CharField(
+        max_length=1000,
+        help_text='Relative path in repository (e.g., docs/README.md)'
+    )
+    is_folder = models.BooleanField(
+        default=False,
+        help_text='True if this is a folder, False for files'
+    )
+    
+    # Display configuration
+    is_visible = models.BooleanField(
+        default=True,
+        help_text='Show in Documents mode'
+    )
+    display_name = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='Custom display name (if not auto-extracted)'
+    )
+    display_name_source = models.CharField(
+        max_length=50,
+        choices=[
+            ('custom', 'Custom Name'),
+            ('filename', 'Use Filename'),
+            ('first_h1', 'First H1 Header'),
+            ('first_h2', 'First H2 Header'),
+            ('title_frontmatter', 'Title from Frontmatter'),
+        ],
+        default='first_h1',
+        help_text='Method for determining display name for this item'
+    )
+    children_display_name_source = models.CharField(
+        max_length=50,
+        choices=[
+            ('first_h1', 'First H1 Header'),
+            ('first_h2', 'First H2 Header'),
+            ('title_frontmatter', 'Title from Frontmatter'),
+            ('filename', 'Use Filename'),
+        ],
+        null=True,
+        blank=True,
+        help_text='Default display name source for children (folders only)'
+    )
+    
+    # Effective (computed) values - pre-calculated inheritance results
+    effective_display_name_source = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text='Computed display name source after inheritance resolution'
+    )
+    effective_is_visible = models.BooleanField(
+        default=True,
+        help_text='Computed visibility after inheritance resolution'
+    )
+    
+    # Extracted name cache
+    extracted_name = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='Cached extracted name from file content'
+    )
+    extracted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='When the name was last extracted'
+    )
+    
+    # Ordering
+    sort_order = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text='Custom sort order (null = auto)'
+    )
+    
+    # Icon (optional)
+    icon = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Emoji or icon name'
+    )
+    
+    # Rule inheritance (for folders)
+    apply_to_children = models.BooleanField(
+        default=False,
+        help_text='Apply this configuration to all children (folders only)'
+    )
+    parent_rule = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='child_mappings',
+        help_text='Parent folder rule (if inherited)'
+    )
+    is_override = models.BooleanField(
+        default=False,
+        help_text='True if this mapping overrides parent folder rules'
+    )
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_file_mappings'
+    )
+    
+    class Meta:
+        db_table = 'wiki_file_mapping'
+        unique_together = [['space', 'file_path']]
+        indexes = [
+            models.Index(fields=['space', 'is_visible']),
+            models.Index(fields=['space', 'file_path']),
+            models.Index(fields=['space', 'is_folder']),
+        ]
+        verbose_name = 'File Mapping'
+        verbose_name_plural = 'File Mappings'
+    
+    def __str__(self):
+        return f"{self.space.name}: {self.file_path}"
+    
+    def get_display_name(self):
+        """Get the effective display name for this file."""
+        if self.display_name_source == 'custom' and self.display_name:
+            return self.display_name
+        elif self.display_name_source == 'filename':
+            return self.file_path.split('/')[-1]
+        elif self.extracted_name:
+            return self.extracted_name
+        else:
+            # Fallback to filename
+            return self.file_path.split('/')[-1]
+    
+    def compute_effective_values(self):
+        """
+        Compute effective display_name_source and is_visible after inheritance.
+        Returns tuple: (effective_source, effective_visible)
+        """
+        # Folders always use filename or custom (no inheritance)
+        if self.is_folder:
+            source = self.display_name_source or 'filename'
+            return (source, self.is_visible)
+        
+        # Files: Check if explicitly set
+        if self.display_name_source:
+            return (self.display_name_source, self.is_visible)
+        
+        # Files: Walk up parent folders for children_display_name_source
+        path_parts = self.file_path.split('/')
+        for i in range(len(path_parts) - 1, 0, -1):
+            parent_path = '/'.join(path_parts[:i])
+            try:
+                parent = FileMapping.objects.get(
+                    space=self.space,
+                    file_path=parent_path,
+                    is_folder=True
+                )
+                if parent.children_display_name_source:
+                    return (parent.children_display_name_source, parent.is_visible)
+            except FileMapping.DoesNotExist:
+                continue
+        
+        # Files: Fall back to space default
+        source = self.space.default_display_name_source or 'first_h1'
+        return (source, True)
+    
+    def save(self, *args, **kwargs):
+        """Override save to compute effective values."""
+        effective_source, effective_visible = self.compute_effective_values()
+        self.effective_display_name_source = effective_source
+        self.effective_is_visible = effective_visible
+        super().save(*args, **kwargs)

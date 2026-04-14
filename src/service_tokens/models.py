@@ -2,11 +2,17 @@
 Service token models for storing encrypted credentials for various services.
 """
 import uuid
+import logging
+import traceback
 from django.db import models
 from django.contrib.auth.models import User
 from django.conf import settings
+from django.db.models.signals import post_save, post_delete, pre_delete
+from django.dispatch import receiver
 from cryptography.fernet import Fernet
 import base64
+
+logger = logging.getLogger(__name__)
 
 
 class ServiceType(models.TextChoices):
@@ -110,3 +116,46 @@ class ServiceToken(models.Model):
     def get_default_zta_header(cls):
         """Get default ZTA header name."""
         return 'X-Zero-Trust-Token'
+
+
+# Signal handlers for tracking ServiceToken operations
+@receiver(post_save, sender=ServiceToken)
+def log_service_token_save(sender, instance, created, **kwargs):
+    """Log when a service token is created or updated."""
+    action = "CREATED" if created else "UPDATED"
+    
+    if instance.service_type == ServiceType.CUSTOM_HEADER:
+        logger.warning(
+            f"[SERVICE_TOKEN] {action} CUSTOM_HEADER token: "
+            f"id={instance.id}, user={instance.user.username}, "
+            f"name={instance.name}, header_name={instance.header_name}, "
+            f"base_url={instance.base_url}"
+        )
+        # Log stack trace to see who created/updated it
+        logger.info(f"[SERVICE_TOKEN] Stack trace:\n{''.join(traceback.format_stack())}")
+    else:
+        logger.info(
+            f"[SERVICE_TOKEN] {action}: "
+            f"id={instance.id}, user={instance.user.username}, "
+            f"type={instance.service_type}, base_url={instance.base_url}"
+        )
+
+
+@receiver(pre_delete, sender=ServiceToken)
+def log_service_token_delete(sender, instance, **kwargs):
+    """Log when a service token is about to be deleted."""
+    if instance.service_type == ServiceType.CUSTOM_HEADER:
+        logger.error(
+            f"[SERVICE_TOKEN] DELETING CUSTOM_HEADER token: "
+            f"id={instance.id}, user={instance.user.username}, "
+            f"name={instance.name}, header_name={instance.header_name}, "
+            f"base_url={instance.base_url}"
+        )
+        # Log full stack trace to see who is deleting it
+        logger.error(f"[SERVICE_TOKEN] DELETE Stack trace:\n{''.join(traceback.format_stack())}")
+    else:
+        logger.warning(
+            f"[SERVICE_TOKEN] DELETING: "
+            f"id={instance.id}, user={instance.user.username}, "
+            f"type={instance.service_type}, base_url={instance.base_url}"
+        )

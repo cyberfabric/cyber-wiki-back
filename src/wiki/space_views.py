@@ -90,7 +90,7 @@ class SpaceViewSet(viewsets.ModelViewSet):
         responses={200: SpaceDetailSerializer},
         tags=['spaces'],
     )
-    def retrieve(self, request, slug=None):
+    def retrieve(self, request, *args, **kwargs):
         space = self.get_object()
         serializer = self.get_serializer(space)
         return Response(serializer.data)
@@ -103,7 +103,8 @@ class SpaceViewSet(viewsets.ModelViewSet):
         responses={200: SpaceDetailSerializer},
         tags=['spaces'],
     )
-    def update(self, request, slug=None, partial=False):
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
         space = self.get_object()
         
         # Check permission
@@ -119,13 +120,26 @@ class SpaceViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
     
     @extend_schema(
+        operation_id='spaces_partial_update',
+        summary='Partially update space',
+        description='Partially update space details. Requires owner or admin permission.',
+        request=SpaceDetailSerializer,
+        responses={200: SpaceDetailSerializer},
+        tags=['spaces'],
+    )
+    def partial_update(self, request, *args, **kwargs):
+        """Handle PATCH requests."""
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+    
+    @extend_schema(
         operation_id='spaces_delete',
         summary='Delete space',
         description='Delete a space. Requires owner permission.',
         responses={204: None},
         tags=['spaces'],
     )
-    def destroy(self, request, slug=None):
+    def destroy(self, request, *args, **kwargs):
         space = self.get_object()
         
         # Only owner can delete
