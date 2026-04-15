@@ -1,10 +1,27 @@
 """
-Tests for multi-user cache isolation.
+Unit tests for multi-user cache isolation.
 
-Ensures that cache entries are properly isolated per user.
+Tested Scenarios:
+- Cache entries are isolated per user with identical requests
+- Cache clear only affects the user's own entries
+- Cache stats only show the user's own entries
+- Cache settings are isolated per user
+
+Untested Scenarios / Gaps:
+- Concurrent cache access from multiple users
+- Cache isolation with thousands of users
+- Memory usage with many simultaneous users
+- Cache invalidation across users
+- Race conditions in multi-user scenarios
+- Cache performance degradation with many users
+
+Test Strategy:
+- Database-backed tests with @pytest.mark.django_db
+- Test cache isolation between two users
+- Verify user-specific operations don't affect other users
+- Test settings, data, and stats isolation
 """
 import pytest
-from django.contrib.auth.models import User
 from users.models import APIResponseCache
 from users.cache import get_cache
 
@@ -13,15 +30,11 @@ from users.cache import get_cache
 class TestCacheMultiUserIsolation:
     """Test that cache is properly isolated between users."""
     
-    def test_cache_entries_isolated_per_user(self):
+    def test_cache_entries_isolated_per_user(self, user, another_user):
         """Test that two users with identical requests get separate cache entries."""
-        # Create two users
-        user1 = User.objects.create_user(username='user1', password='pass1')
-        user2 = User.objects.create_user(username='user2', password='pass2')
-        
         # Enable cache for both users
-        cache1 = get_cache(user1)
-        cache2 = get_cache(user2)
+        cache1 = get_cache(user)
+        cache2 = get_cache(another_user)
         
         cache1.update_settings(cache_enabled=True, cache_ttl_minutes=60)
         cache2.update_settings(cache_enabled=True, cache_ttl_minutes=60)
@@ -53,8 +66,8 @@ class TestCacheMultiUserIsolation:
         )
         
         # Verify both cache entries exist
-        assert APIResponseCache.objects.filter(user=user1).count() == 1
-        assert APIResponseCache.objects.filter(user=user2).count() == 1
+        assert APIResponseCache.objects.filter(user=user).count() == 1
+        assert APIResponseCache.objects.filter(user=another_user).count() == 1
         
         # Verify user1 gets their own cached data
         cached1 = cache1.get(provider_type, provider_id, endpoint, params)
@@ -69,14 +82,10 @@ class TestCacheMultiUserIsolation:
         # Verify the data is different
         assert cached1['data'] != cached2['data']
     
-    def test_cache_clear_only_affects_own_entries(self):
+    def test_cache_clear_only_affects_own_entries(self, user, another_user):
         """Test that clearing cache only affects the user's own entries."""
-        # Create two users
-        user1 = User.objects.create_user(username='user1', password='pass1')
-        user2 = User.objects.create_user(username='user2', password='pass2')
-        
-        cache1 = get_cache(user1)
-        cache2 = get_cache(user2)
+        cache1 = get_cache(user)
+        cache2 = get_cache(another_user)
         
         cache1.update_settings(cache_enabled=True)
         cache2.update_settings(cache_enabled=True)
@@ -86,25 +95,21 @@ class TestCacheMultiUserIsolation:
         cache2.set('github', 'github.com', '/repos', {}, {'user2': 'data'})
         
         # Verify both have cache entries
-        assert APIResponseCache.objects.filter(user=user1).count() == 1
-        assert APIResponseCache.objects.filter(user=user2).count() == 1
+        assert APIResponseCache.objects.filter(user=user).count() == 1
+        assert APIResponseCache.objects.filter(user=another_user).count() == 1
         
         # User1 clears their cache
         count = cache1.clear()
         assert count == 1
         
         # Verify user1's cache is cleared but user2's is not
-        assert APIResponseCache.objects.filter(user=user1).count() == 0
-        assert APIResponseCache.objects.filter(user=user2).count() == 1
+        assert APIResponseCache.objects.filter(user=user).count() == 0
+        assert APIResponseCache.objects.filter(user=another_user).count() == 1
     
-    def test_cache_stats_only_show_own_entries(self):
+    def test_cache_stats_only_show_own_entries(self, user, another_user):
         """Test that stats only show the user's own cache entries."""
-        # Create two users
-        user1 = User.objects.create_user(username='user1', password='pass1')
-        user2 = User.objects.create_user(username='user2', password='pass2')
-        
-        cache1 = get_cache(user1)
-        cache2 = get_cache(user2)
+        cache1 = get_cache(user)
+        cache2 = get_cache(another_user)
         
         cache1.update_settings(cache_enabled=True)
         cache2.update_settings(cache_enabled=True)
@@ -133,14 +138,10 @@ class TestCacheMultiUserIsolation:
         assert 'bitbucket' in stats2['by_provider']
         assert 'github' not in stats2['by_provider']
     
-    def test_settings_isolated_per_user(self):
+    def test_settings_isolated_per_user(self, user, another_user):
         """Test that cache settings are isolated per user."""
-        # Create two users
-        user1 = User.objects.create_user(username='user1', password='pass1')
-        user2 = User.objects.create_user(username='user2', password='pass2')
-        
-        cache1 = get_cache(user1)
-        cache2 = get_cache(user2)
+        cache1 = get_cache(user)
+        cache2 = get_cache(another_user)
         
         # User1 enables cache with 60 min TTL
         cache1.update_settings(cache_enabled=True, cache_ttl_minutes=60)
@@ -163,5 +164,5 @@ class TestCacheMultiUserIsolation:
         cache2.set('github', 'github.com', '/test', {}, {'data': 'test'})
         
         # User1 should have cache entry, user2 should not (cache disabled)
-        assert APIResponseCache.objects.filter(user=user1).count() == 1
-        assert APIResponseCache.objects.filter(user=user2).count() == 0
+        assert APIResponseCache.objects.filter(user=user).count() == 1
+        assert APIResponseCache.objects.filter(user=another_user).count() == 0

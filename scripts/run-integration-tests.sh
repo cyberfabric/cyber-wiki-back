@@ -11,34 +11,56 @@ echo "=== CyberWiki Backend Integration Tests ==="
 echo ""
 
 # Load configuration (matches run-local.sh pattern)
-# Priority: .env.dev > .env > .env.test
-REPO_ROOT="$(cd "$BACKEND_DIR/.." && pwd)"
+# Load all files and merge them (later files override earlier ones)
+# Priority: .env.test (lowest) < .env < .env.dev (highest)
+REPO_ROOT="$(cd "$BACKEND_DIR/../.." && pwd)"
 ENV_DEV="$REPO_ROOT/.env.dev"
 ENV="$REPO_ROOT/.env"
 ENV_TEST="src/integration_tests/.env.test"
 
+echo "📋 Loading configuration..."
+CONFIG_LOADED=false
+
+# Temporarily disable exit on error for config loading
+set +e
+
+# Load .env.test first (lowest priority)
+if [ -f "$ENV_TEST" ]; then
+    set -a
+    source "$ENV_TEST" 2>/dev/null
+    set +a
+    echo "   ✓ Loaded from .env.test"
+    CONFIG_LOADED=true
+fi
+
+# Load .env (medium priority)
+if [ -f "$ENV" ]; then
+    set -a
+    source "$ENV" 2>/dev/null
+    set +a
+    echo "   ✓ Loaded from .env"
+    CONFIG_LOADED=true
+fi
+
+# Load .env.dev last (highest priority)
 if [ -f "$ENV_DEV" ]; then
-    echo "📋 Loading configuration from .env.dev (matches run-local.sh)..."
     set -a
-    source "$ENV_DEV"
+    source "$ENV_DEV" 2>/dev/null
     set +a
-    CONFIG_SOURCE=".env.dev"
-elif [ -f "$ENV" ]; then
-    echo "📋 Loading configuration from .env..."
-    set -a
-    source "$ENV"
-    set +a
-    CONFIG_SOURCE=".env"
-elif [ -f "$ENV_TEST" ]; then
-    echo "📋 Loading configuration from .env.test..."
-    export $(cat "$ENV_TEST" | grep -v '^#' | xargs)
-    CONFIG_SOURCE=".env.test"
-else
-    echo "⚠️  No .env.dev, .env, or .env.test found. Creating .env.test from example..."
+    echo "   ✓ Loaded from .env.dev"
+    CONFIG_LOADED=true
+fi
+
+# Re-enable exit on error
+set -e
+
+if [ "$CONFIG_LOADED" = false ]; then
+    echo "⚠️  No configuration file found (.env.dev, .env, or .env.test)"
+    echo "Creating .env.test from example..."
     cp src/integration_tests/.env.test.example src/integration_tests/.env.test
-    echo "✅ Created .env.test - please configure it before running tests"
+    echo "✅ Created .env.test - please configure it"
     echo ""
-    echo "Recommended: Use .env.dev or .env (same as run-local.sh) or configure .env.test"
+    echo "Recommended: Use .env.dev or .env (same as run-local.sh)"
     echo "  1. Set API_TOKEN (create via web UI or Django shell)"
     echo "  2. Optionally set TEST_GIT_* variables for git provider tests"
     echo ""
@@ -52,13 +74,15 @@ fi
 
 # Check if API_TOKEN is set
 if [ -z "$API_TOKEN" ] || [ "$API_TOKEN" = "your-api-token-here" ]; then
-    echo "⚠️  API_TOKEN not configured in .env.test"
+    echo ""
+    echo "⚠️  API_TOKEN not configured"
     echo ""
     echo "To create an API token:"
     echo "  1. Start server: make run"
     echo "  2. Login at http://localhost:8000/admin (admin/admin)"
     echo "  3. Go to Profile → API Tokens"
-    echo "  4. Create token and copy to .env.test"
+    echo "  4. Create token and add to .env or .env.dev:"
+    echo "     echo 'API_TOKEN=your-token-here' >> .env"
     echo ""
     echo "Or use Django shell:"
     echo "  python manage.py shell"
@@ -69,6 +93,16 @@ if [ -z "$API_TOKEN" ] || [ "$API_TOKEN" = "your-api-token-here" ]; then
     echo "  >>> print(f'API Token: {token.token}')"
     echo ""
     exit 1
+fi
+
+echo "   ✓ API URL: ${API_URL:-http://localhost:8000}"
+echo "   ✓ API Token: ${API_TOKEN:0:10}..."
+echo ""
+
+# Activate virtual environment if it exists
+if [ -d "venv" ]; then
+    echo "🔧 Activating virtual environment..."
+    source venv/bin/activate
 fi
 
 # Check if migrations are up to date

@@ -1,30 +1,38 @@
 """
-Integration tests for file mapping inheritance and effective value computation.
+Unit tests for file mapping inheritance and effective value computation.
+
+Tested Scenarios:
+- File inherits from space default when no parent folder
+- File inherits from parent folder's children_display_name_source
+- File overrides parent folder with explicit setting
+- Nested folder inheritance (nearest parent wins)
+- Folders always use filename or custom (never inherit)
+- Visibility inheritance from parent folder
+- Effective values recompute after parent changes
+- Effective values recompute after space default changes
+
+Untested Scenarios / Gaps:
+- Multi-level nested inheritance (> 3 levels)
+- Circular inheritance detection
+- Inheritance with deleted parent folders
+- Concurrent updates to parent and child
+- Bulk recomputation performance
+- Cache invalidation on inheritance changes
+- Cross-space inheritance (should not happen)
+
+Test Strategy:
+- Model tests with database fixtures
+- Use shared fixtures from conftest.py
+- Test inheritance chain logic
+- Test effective value computation
 """
 import pytest
-from django.contrib.auth.models import User
 from wiki.models import Space, FileMapping
 
 
 @pytest.mark.django_db
 class TestFileMappingInheritance:
     """Test inheritance chain: space → folder → file"""
-    
-    @pytest.fixture
-    def user(self):
-        return User.objects.create_user(username='testuser', password='testpass')
-    
-    @pytest.fixture
-    def space(self, user):
-        return Space.objects.create(
-            slug='test-space',
-            name='Test Space',
-            owner=user,
-            default_display_name_source='first_h1',
-            git_provider='local_git',
-            git_base_url='/tmp/test-repo',
-            git_repository_id='test-repo',
-        )
     
     def test_file_inherits_from_space_default(self, space):
         """File with no mapping should inherit from space default."""
@@ -154,22 +162,6 @@ class TestFileMappingInheritance:
 @pytest.mark.django_db
 class TestFileMappingSync:
     """Test sync functionality - removing outdated mappings."""
-    
-    @pytest.fixture
-    def user(self):
-        return User.objects.create_user(username='testuser', password='testpass')
-    
-    @pytest.fixture
-    def space(self, user):
-        return Space.objects.create(
-            slug='test-space',
-            name='Test Space',
-            owner=user,
-            default_display_name_source='first_h1',
-            git_provider='local_git',
-            git_base_url='/tmp/test-repo',
-            git_repository_id='test-repo',
-        )
     
     def test_recompute_effective_values_after_parent_change(self, space):
         """When parent folder changes, child effective values should update."""

@@ -1,12 +1,31 @@
 """
 Unit tests for Bitbucket Server nested path handling.
 
-Tests the fix for Bitbucket API returning collapsed paths like ".agents/skills"
-at root level instead of just ".agents".
+Tested Scenarios:
+- Root level nested paths are collapsed to top-level directories
+- Multiple nested paths sharing same top-level directory are deduplicated
+- Subdirectory nested paths are collapsed correctly
+- Normal (non-nested) paths remain unchanged
+- Mixed nested and normal paths are handled correctly
+
+Untested Scenarios / Gaps:
+- Very deep nesting (> 5 levels)
+- Special characters in path names
+- Unicode characters in paths
+- Empty path handling
+- Path normalization edge cases
+- Performance with large directory trees
+
+Test Strategy:
+- Pure unit tests with mocks (no database)
+- Mock Bitbucket API responses
+- Test path collapsing logic in isolation
+- Fast execution (< 1 second per test)
 """
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 from git_provider.providers.bitbucket_server import BitbucketServerProvider
+from unit_tests.test_helpers import create_mock_response
 
 
 class TestBitbucketNestedPaths:
@@ -29,8 +48,7 @@ class TestBitbucketNestedPaths:
         Example: ".agents/skills" should become ".agents"
         """
         # Mock Bitbucket API response with nested paths
-        mock_response = Mock()
-        mock_response.json.return_value = {
+        mock_response = create_mock_response(200, {
             'children': {
                 'values': [
                     {
@@ -55,8 +73,7 @@ class TestBitbucketNestedPaths:
                     }
                 ]
             }
-        }
-        mock_response.status_code = 200
+        })
         
         with patch.object(provider, '_request', return_value=mock_response):
             result = provider.get_directory_tree('PROJECT', 'repo', path='', branch='main')
@@ -82,8 +99,7 @@ class TestBitbucketNestedPaths:
         
         Example: ".agents/skills" and ".agents/workflows" should both become ".agents"
         """
-        mock_response = Mock()
-        mock_response.json.return_value = {
+        mock_response = create_mock_response(200, {
             'children': {
                 'values': [
                     {
@@ -103,8 +119,7 @@ class TestBitbucketNestedPaths:
                     }
                 ]
             }
-        }
-        mock_response.status_code = 200
+        })
         
         with patch.object(provider, '_request', return_value=mock_response):
             result = provider.get_directory_tree('PROJECT', 'repo', path='', branch='main')
@@ -121,8 +136,7 @@ class TestBitbucketNestedPaths:
         
         Example: When in "src/", path "components/ui/Button" should become "components"
         """
-        mock_response = Mock()
-        mock_response.json.return_value = {
+        mock_response = create_mock_response(200, {
             'children': {
                 'values': [
                     {
@@ -142,8 +156,7 @@ class TestBitbucketNestedPaths:
                     }
                 ]
             }
-        }
-        mock_response.status_code = 200
+        })
         
         with patch.object(provider, '_request', return_value=mock_response):
             result = provider.get_directory_tree('PROJECT', 'repo', path='src', branch='main')
@@ -162,8 +175,7 @@ class TestBitbucketNestedPaths:
         """
         Test that normal (non-nested) paths are returned as-is.
         """
-        mock_response = Mock()
-        mock_response.json.return_value = {
+        mock_response = create_mock_response(200, {
             'children': {
                 'values': [
                     {
@@ -183,8 +195,7 @@ class TestBitbucketNestedPaths:
                     }
                 ]
             }
-        }
-        mock_response.status_code = 200
+        })
         
         with patch.object(provider, '_request', return_value=mock_response):
             result = provider.get_directory_tree('PROJECT', 'repo', path='', branch='main')
@@ -201,8 +212,7 @@ class TestBitbucketNestedPaths:
         """
         Test handling of a mix of nested and normal paths.
         """
-        mock_response = Mock()
-        mock_response.json.return_value = {
+        mock_response = create_mock_response(200, {
             'children': {
                 'values': [
                     {
@@ -232,8 +242,7 @@ class TestBitbucketNestedPaths:
                     }
                 ]
             }
-        }
-        mock_response.status_code = 200
+        })
         
         with patch.object(provider, '_request', return_value=mock_response):
             result = provider.get_directory_tree('PROJECT', 'repo', path='', branch='main')

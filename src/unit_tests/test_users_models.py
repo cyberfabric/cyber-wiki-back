@@ -1,8 +1,33 @@
 """
-Tests for users models.
+Unit tests for user models.
+
+Tested Scenarios:
+- UserProfile creation and default role
+- UserProfile role choices validation
+- ApiToken generation and uniqueness
+- ApiToken creation and string representation
+- FavoriteRepository creation and uniqueness constraint
+- RecentRepository creation with timestamp
+- RepositoryViewMode creation and default value
+
+Untested Scenarios / Gaps:
+- UserProfile update operations
+- ApiToken expiration and renewal
+- ApiToken last_used_at updates
+- FavoriteRepository ordering and limits
+- RecentRepository cleanup of old entries
+- RepositoryViewMode updates and history
+- Cascade deletion behavior
+- Model validation edge cases
+- Concurrent creation conflicts
+
+Test Strategy:
+- Model tests with database using @pytest.mark.django_db
+- Test model creation, defaults, and constraints
+- Use shared fixtures from conftest.py
+- Verify string representations and relationships
 """
 import pytest
-from django.contrib.auth.models import User
 from users.models import UserProfile, ApiToken, FavoriteRepository, RecentRepository, RepositoryViewMode, UserRole
 
 
@@ -10,13 +35,8 @@ from users.models import UserProfile, ApiToken, FavoriteRepository, RecentReposi
 class TestUserProfile:
     """Tests for UserProfile model."""
     
-    def test_create_user_profile(self):
+    def test_create_user_profile(self, user):
         """Test creating a user profile."""
-        user = User.objects.create_user(
-            username='testuser',
-            email='test@example.com',
-            password='testpass123'
-        )
         profile = UserProfile.objects.create(
             user=user,
             role='editor'
@@ -26,16 +46,14 @@ class TestUserProfile:
         assert profile.role == 'editor'
         assert str(profile) == 'testuser - editor'
     
-    def test_user_profile_default_role(self):
+    def test_user_profile_default_role(self, user):
         """Test default role is viewer."""
-        user = User.objects.create_user(username='testuser2')
         profile = UserProfile.objects.create(user=user)
         
         assert profile.role == 'viewer'
     
-    def test_user_profile_role_choices(self):
+    def test_user_profile_role_choices(self, user):
         """Test all role choices are valid."""
-        user = User.objects.create_user(username='testuser3')
         
         for role, _ in UserRole.choices:
             profile = UserProfile.objects.create(user=user, role=role)
@@ -58,9 +76,8 @@ class TestApiToken:
         token2 = ApiToken.generate_token()
         assert token != token2
     
-    def test_create_api_token(self):
+    def test_create_api_token(self, user):
         """Test creating an API token."""
-        user = User.objects.create_user(username='testuser')
         api_token = ApiToken.objects.create(
             user=user,
             name='Test Token'
@@ -71,9 +88,8 @@ class TestApiToken:
         assert len(api_token.token) == 64
         assert api_token.last_used_at is None
     
-    def test_api_token_string_representation(self):
+    def test_api_token_string_representation(self, user):
         """Test string representation."""
-        user = User.objects.create_user(username='testuser')
         api_token = ApiToken.objects.create(
             user=user,
             name='My Token'
@@ -86,9 +102,8 @@ class TestApiToken:
 class TestFavoriteRepository:
     """Tests for FavoriteRepository model."""
     
-    def test_create_favorite(self):
+    def test_create_favorite(self, user):
         """Test creating a favorite repository."""
-        user = User.objects.create_user(username='testuser')
         favorite = FavoriteRepository.objects.create(
             user=user,
             repository_id='facebook/react'
@@ -98,9 +113,8 @@ class TestFavoriteRepository:
         assert favorite.repository_id == 'facebook/react'
         assert str(favorite) == 'testuser - facebook/react'
     
-    def test_unique_favorite(self):
+    def test_unique_favorite(self, user):
         """Test that user can't favorite same repo twice."""
-        user = User.objects.create_user(username='testuser')
         FavoriteRepository.objects.create(
             user=user,
             repository_id='facebook/react'
@@ -118,9 +132,8 @@ class TestFavoriteRepository:
 class TestRecentRepository:
     """Tests for RecentRepository model."""
     
-    def test_create_recent(self):
+    def test_create_recent(self, user):
         """Test creating a recent repository."""
-        user = User.objects.create_user(username='testuser')
         recent = RecentRepository.objects.create(
             user=user,
             repository_id='facebook/react'
@@ -135,9 +148,8 @@ class TestRecentRepository:
 class TestRepositoryViewMode:
     """Tests for RepositoryViewMode model."""
     
-    def test_create_view_mode(self):
+    def test_create_view_mode(self, user):
         """Test creating a repository view mode."""
-        user = User.objects.create_user(username='testuser')
         view_mode = RepositoryViewMode.objects.create(
             user=user,
             repository_id='facebook/react',
@@ -148,9 +160,8 @@ class TestRepositoryViewMode:
         assert view_mode.repository_id == 'facebook/react'
         assert view_mode.view_mode == 'developer'
     
-    def test_default_view_mode(self):
+    def test_default_view_mode(self, user):
         """Test default view mode is document."""
-        user = User.objects.create_user(username='testuser')
         view_mode = RepositoryViewMode.objects.create(
             user=user,
             repository_id='facebook/react'
