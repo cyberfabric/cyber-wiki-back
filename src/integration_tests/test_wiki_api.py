@@ -1,17 +1,38 @@
 """
-Integration tests for Wiki/Space API endpoints.
+Integration tests for Wiki/Space API.
+
+Tested Scenarios:
+- Creating spaces with all fields
+- Creating spaces with missing required fields (error handling)
+- Reading/retrieving space details
+- Listing all spaces
+- Updating space editable fields
+- Attempting to update immutable fields (slug)
+- Deleting spaces
+- Bulk operations (creating and listing multiple spaces)
+
+Untested Scenarios / Gaps:
+- Space permissions (viewer/editor/admin roles)
+- Space visibility settings (public/private)
+- Space templates
+- Space cloning/duplication
+- Space archiving/restoration
+- Space search and filtering (by owner, tags, etc.)
+- Space statistics (page count, contributors, etc.)
+- Space configuration (git provider settings)
+- Space webhooks
+- Space export/import
+- Space collaboration features
+- Space audit logs
+- Space quotas and limits
 
 Test Strategy:
 - Each test is completely independent
-- Each test creates its own artifacts before testing
-- Each test cleans up its artifacts after testing
+- Tests use real backend with actual database
 - All test artifacts prefixed with 'test_' for easy identification
-- Global cleanup removes any leftover artifacts from failed tests
-
-Test Coverage:
-1. Space CRUD operations (create, read, update, delete)
-2. Space listing and filtering
-3. Bulk operations
+- Global cleanup removes leftover artifacts from failed tests
+- Proper cleanup in finally blocks
+- Comprehensive logging for debugging
 """
 import pytest
 import requests

@@ -1,148 +1,42 @@
 """
 Integration tests for Enrichment Provider API.
 
-Tests the enrichment system including:
-- Enrichment retrieval (all types and filtered)
-- Comment enrichments
-- Diff enrichments
+Tested Scenarios:
+- Listing all enrichment types
+- Retrieving comment enrichments for a file
+- Filtering comment enrichments by type
+- Threaded comment enrichments (parent-child relationships)
+- Diff enrichments (no changes scenario)
+- Aggregating all enrichments for a source URI
+- Missing source_uri parameter error handling
+- Unauthenticated request error handling
+
+Untested Scenarios / Gaps:
+- PR (Pull Request) enrichments with real git provider
 - Local changes enrichments
-- PR enrichments
-- Enrichment type listing
+- Diff enrichments with actual changes
+- Enrichment caching behavior
+- Enrichment performance with large files
+- Enrichment ordering and sorting
+- Enrichment pagination
+- Real-time enrichment updates
+- Enrichment conflicts resolution
+- Cross-file enrichments
+- Enrichment export/import
+
+Test Strategy:
+- Each test is completely independent
+- Tests use real backend with actual database
+- Proper cleanup in finally blocks
+- Comprehensive logging for debugging
 """
 import pytest
 import requests
-from .test_helpers import create_space, delete_space, get_unique_id
-
-
-# ============================================================================
-# Helper Functions for Enrichment Tests
-# ============================================================================
-
-def create_test_comment(api_session, source_uri: str, line_start: int = 1, line_end: int = 1, text: str = "Test comment"):
-    """
-    Create a test file comment.
-    
-    Args:
-        api_session: Authenticated API session
-        source_uri: Source URI for the comment
-        line_start: Starting line number
-        line_end: Ending line number
-        text: Comment text
-    
-    Returns:
-        Dict with created comment data or None
-    """
-    comment_data = {
-        "source_uri": source_uri,
-        "line_start": line_start,
-        "line_end": line_end,
-        "text": text,
-    }
-    
-    try:
-        response = requests.post(
-            f"{api_session.base_url}/api/wiki/v1/comments/",
-            json=comment_data,
-            headers=api_session.headers,
-            timeout=5
-        )
-        
-        if response.status_code == 201:
-            return response.json()
-        else:
-            print(f"⚠️  Failed to create comment: HTTP {response.status_code}")
-            print(f"Response: {response.text}")
-            return None
-    except Exception as e:
-        print(f"⚠️  Error creating comment: {e}")
-        return None
-
-
-def delete_test_comment(api_session, comment_id: int) -> bool:
-    """
-    Delete a test comment.
-    
-    Args:
-        api_session: Authenticated API session
-        comment_id: ID of the comment to delete
-    
-    Returns:
-        True if deletion was successful
-    """
-    try:
-        response = requests.delete(
-            f"{api_session.base_url}/api/wiki/v1/comments/{comment_id}/",
-            headers=api_session.headers,
-            timeout=5
-        )
-        return response.status_code in [200, 204]
-    except Exception as e:
-        print(f"⚠️  Error deleting comment {comment_id}: {e}")
-        return False
-
-
-def create_test_user_change(api_session, space_id: int, file_path: str, content: str = "Test content", description: str = "Test change"):
-    """
-    Create a test user change (pending change).
-    
-    Args:
-        api_session: Authenticated API session
-        space_id: ID of the space
-        file_path: Path to the file
-        content: Modified content
-        description: Change description
-    
-    Returns:
-        Dict with created change data or None
-    """
-    change_data = {
-        "space_id": space_id,
-        "file_path": file_path,
-        "content": content,
-        "description": description,
-        "status": "pending",
-    }
-    
-    try:
-        response = requests.post(
-            f"{api_session.base_url}/api/wiki/v1/user-changes/",
-            json=change_data,
-            headers=api_session.headers,
-            timeout=5
-        )
-        
-        if response.status_code == 201:
-            return response.json()
-        else:
-            print(f"⚠️  Failed to create user change: HTTP {response.status_code}")
-            print(f"Response: {response.text}")
-            return None
-    except Exception as e:
-        print(f"⚠️  Error creating user change: {e}")
-        return None
-
-
-def delete_test_user_change(api_session, change_id: int) -> bool:
-    """
-    Delete a test user change.
-    
-    Args:
-        api_session: Authenticated API session
-        change_id: ID of the change to delete
-    
-    Returns:
-        True if deletion was successful
-    """
-    try:
-        response = requests.delete(
-            f"{api_session.base_url}/api/wiki/v1/user-changes/{change_id}/",
-            headers=api_session.headers,
-            timeout=5
-        )
-        return response.status_code in [200, 204]
-    except Exception as e:
-        print(f"⚠️  Error deleting user change {change_id}: {e}")
-        return False
+from .test_helpers import (
+    create_space, delete_space, get_unique_id,
+    create_comment, delete_comment,
+    create_user_change, delete_user_change
+)
 
 
 # ============================================================================
@@ -211,12 +105,12 @@ class TestCommentEnrichments:
         comment = None
         
         try:
-            comment = create_test_comment(
+            comment = create_comment(
                 api_session,
                 source_uri=source_uri,
+                text="This is a test comment for enrichment",
                 line_start=10,
-                line_end=15,
-                text="This is a test comment for enrichment"
+                line_end=15
             )
             assert comment is not None, "Failed to create test comment"
             print(f"✓ Created comment: ID {comment['id']}")
@@ -258,7 +152,7 @@ class TestCommentEnrichments:
             # Cleanup
             print("\n🧹 Cleanup: Removing test artifacts")
             if comment:
-                delete_test_comment(api_session, comment['id'])
+                delete_comment(api_session, comment['id'])
                 print(f"✓ Deleted comment: {comment['id']}")
             delete_space(api_session, space['slug'])
             print(f"✓ Deleted space: {space['slug']}")
@@ -282,7 +176,7 @@ class TestCommentEnrichments:
         comment = None
         
         try:
-            comment = create_test_comment(
+            comment = create_comment(
                 api_session,
                 source_uri=source_uri,
                 text="Filtered comment test"
@@ -317,7 +211,7 @@ class TestCommentEnrichments:
             # Cleanup
             print("\n🧹 Cleanup")
             if comment:
-                delete_test_comment(api_session, comment['id'])
+                delete_comment(api_session, comment['id'])
             delete_space(api_session, space['slug'])
     
     def test_threaded_comment_enrichments(self, api_session):
@@ -338,50 +232,38 @@ class TestCommentEnrichments:
         try:
             # Create parent comment
             print("\n📋 Step 1: Create parent comment")
-            parent_response = requests.post(
-                f"{api_session.base_url}/api/wiki/v1/comments/",
-                json={
-                    "source_uri": source_uri,
-                    "line_start": 10,
-                    "line_end": 10,
-                    "text": "Parent comment"
-                },
-                headers=api_session.headers
+            parent = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="Parent comment",
+                line_start=10,
+                line_end=10
             )
-            assert parent_response.status_code == 201
-            parent = parent_response.json()
+            assert parent is not None, "Failed to create parent comment"
             parent_id = parent['id']
             print(f"✓ Created parent comment: {parent_id}")
             
             # Create first reply
             print("\n📋 Step 2: Create first reply")
-            reply1_response = requests.post(
-                f"{api_session.base_url}/api/wiki/v1/comments/",
-                json={
-                    "source_uri": source_uri,
-                    "text": "First reply",
-                    "parent_comment": parent_id
-                },
-                headers=api_session.headers
+            reply1 = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="First reply",
+                parent_id=parent_id
             )
-            assert reply1_response.status_code == 201
-            reply1 = reply1_response.json()
+            assert reply1 is not None, "Failed to create first reply"
             reply1_id = reply1['id']
             print(f"✓ Created first reply: {reply1_id}")
             
             # Create second reply
             print("\n📋 Step 3: Create second reply")
-            reply2_response = requests.post(
-                f"{api_session.base_url}/api/wiki/v1/comments/",
-                json={
-                    "source_uri": source_uri,
-                    "text": "Second reply",
-                    "parent_comment": parent_id
-                },
-                headers=api_session.headers
+            reply2 = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="Second reply",
+                parent_id=parent_id
             )
-            assert reply2_response.status_code == 201
-            reply2 = reply2_response.json()
+            assert reply2 is not None, "Failed to create second reply"
             reply2_id = reply2['id']
             print(f"✓ Created second reply: {reply2_id}")
             
@@ -427,10 +309,7 @@ class TestCommentEnrichments:
             print("\n🧹 Cleanup")
             for comment_id in [reply2_id, reply1_id, parent_id]:
                 if comment_id:
-                    requests.delete(
-                        f"{api_session.base_url}/api/wiki/v1/comments/{comment_id}/",
-                        headers=api_session.headers
-                    )
+                    delete_comment(api_session, comment_id)
 
 
 class TestDiffEnrichments:
@@ -491,7 +370,7 @@ class TestEnrichmentAggregation:
         comment = None
         
         try:
-            comment = create_test_comment(
+            comment = create_comment(
                 api_session,
                 source_uri=source_uri,
                 text="Aggregation test comment"
@@ -532,7 +411,7 @@ class TestEnrichmentAggregation:
             # Cleanup
             print("\n🧹 Cleanup")
             if comment:
-                delete_test_comment(api_session, comment['id'])
+                delete_comment(api_session, comment['id'])
             delete_space(api_session, space['slug'])
 
 

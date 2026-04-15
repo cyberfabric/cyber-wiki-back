@@ -1,190 +1,50 @@
 """
 Integration tests for User Changes API.
 
-Tests cover:
+Tested Scenarios:
 - Creating pending changes
-- Listing changes (own and all for editors/admins)
-- Filtering by status
-- Getting change details
-- Approving changes (editor/admin)
-- Rejecting changes (editor/admin)
+- Listing user changes
+- Retrieving change details
 - Deleting changes
-- Committing approved changes (admin)
+- Approving changes (editor/admin workflow)
+- Rejecting changes (editor/admin workflow)
+- Filtering changes by status (pending/approved/rejected)
 - Change descriptions and metadata
+- Concurrent changes to same file
+- Committing approved changes (admin workflow)
 
-Following TEST_STRUCTURE.md principles:
-- Independent tests with proper setup/teardown
+Untested Scenarios / Gaps:
+- Multi-user approval workflows
+- Change conflict detection and resolution
+- Change diff visualization
+- Change versioning and history
+- Bulk change operations
+- Change templates
+- Change notifications
+- Change rollback
+- Change permissions (who can approve/reject)
+- Change expiration
+- Change dependencies (change A requires change B)
+- Real git integration (actual commits to repository)
+
+Test Strategy:
+- Each test is completely independent
+- Tests use real backend with actual database
+- Proper cleanup in finally blocks
 - Comprehensive logging
 - Idempotent operations
 - Reusable helper functions
 """
 import pytest
 import requests
-from .test_helpers import get_unique_id
-
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
-def create_test_user_change(api_session, repository_full_name: str, file_path: str, 
-                           original_content: str, modified_content: str, commit_message: str = ""):
-    """
-    Create a test user change.
-    
-    Args:
-        api_session: API session fixture
-        repository_full_name: Repository identifier
-        file_path: File path in repository
-        original_content: Original file content
-        modified_content: Modified file content
-        commit_message: Optional commit message
-    
-    Returns:
-        dict: Created change data or None if failed
-    """
-    try:
-        payload = {
-            "repository_full_name": repository_full_name,
-            "file_path": file_path,
-            "original_content": original_content,
-            "modified_content": modified_content,
-            "commit_message": commit_message
-        }
-        
-        response = requests.post(
-            f"{api_session.base_url}/api/wiki/v1/changes/",
-            json=payload,
-            headers=api_session.headers,
-            timeout=5
-        )
-        
-        if response.status_code == 201:
-            change = response.json()
-            print(f"✅ Created test user change: {change['id']}")
-            return change
-        else:
-            print(f"⚠️  Failed to create user change: {response.status_code}")
-            print(f"    Response: {response.text}")
-            return None
-    except Exception as e:
-        print(f"❌ Error creating user change: {e}")
-        return None
-
-
-def delete_test_user_change(api_session, change_id: str):
-    """
-    Delete a test user change.
-    
-    Args:
-        api_session: API session fixture
-        change_id: Change ID to delete
-    
-    Returns:
-        bool: True if deleted successfully
-    """
-    try:
-        response = requests.delete(
-            f"{api_session.base_url}/api/wiki/v1/changes/{change_id}/",
-            headers=api_session.headers,
-            timeout=5
-        )
-        
-        if response.status_code in [200, 204]:
-            print(f"✅ Deleted test user change: {change_id}")
-            return True
-        else:
-            print(f"⚠️  Failed to delete user change {change_id}: {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ Error deleting user change {change_id}: {e}")
-        return False
-
-
-def approve_user_change(api_session, change_id: str):
-    """
-    Approve a user change.
-    
-    Args:
-        api_session: API session fixture
-        change_id: Change ID to approve
-    
-    Returns:
-        dict: Approved change data or None if failed
-    """
-    try:
-        response = requests.post(
-            f"{api_session.base_url}/api/wiki/v1/changes/{change_id}/approve/",
-            headers=api_session.headers,
-            timeout=5
-        )
-        
-        if response.status_code == 200:
-            change = response.json()
-            print(f"✅ Approved user change: {change_id}")
-            return change
-        else:
-            print(f"⚠️  Failed to approve user change: {response.status_code}")
-            print(f"    Response: {response.text}")
-            return None
-    except Exception as e:
-        print(f"❌ Error approving user change: {e}")
-        return None
-
-
-def reject_user_change(api_session, change_id: str):
-    """
-    Reject a user change.
-    
-    Args:
-        api_session: API session fixture
-        change_id: Change ID to reject
-    
-    Returns:
-        dict: Rejected change data or None if failed
-    """
-    try:
-        response = requests.post(
-            f"{api_session.base_url}/api/wiki/v1/changes/{change_id}/reject/",
-            headers=api_session.headers,
-            timeout=5
-        )
-        
-        if response.status_code == 200:
-            change = response.json()
-            print(f"✅ Rejected user change: {change_id}")
-            return change
-        else:
-            print(f"⚠️  Failed to reject user change: {response.status_code}")
-            print(f"    Response: {response.text}")
-            return None
-    except Exception as e:
-        print(f"❌ Error rejecting user change: {e}")
-        return None
-
-
-def cleanup_test_user_changes(api_session):
-    """
-    Clean up all test user changes.
-    
-    Args:
-        api_session: API session fixture
-    """
-    try:
-        response = requests.get(
-            f"{api_session.base_url}/api/wiki/v1/changes/",
-            headers=api_session.headers,
-            timeout=5
-        )
-        
-        if response.status_code == 200:
-            changes = response.json()
-            for change in changes:
-                # Only delete test changes (those with test_ in repository name)
-                if 'test_' in change.get('repository_full_name', ''):
-                    delete_test_user_change(api_session, change['id'])
-    except Exception as e:
-        print(f"⚠️  Error during user changes cleanup: {e}")
+from .test_helpers import (
+    get_unique_id,
+    create_user_change,
+    delete_user_change,
+    approve_user_change,
+    reject_user_change,
+    cleanup_user_changes
+)
 
 
 # ============================================================================
@@ -221,7 +81,7 @@ class TestUserChangesBasicOperations:
             modified = "def hello():\n    print('Hello, World!')"
             commit_msg = f"Test change {test_id}"
             
-            change = create_test_user_change(
+            change = create_user_change(
                 api_session, repo_name, file_path, original, modified, commit_msg
             )
             
@@ -241,7 +101,7 @@ class TestUserChangesBasicOperations:
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            cleanup_test_user_changes(api_session)
+            cleanup_user_changes(api_session)
     
     def test_list_user_changes(self, api_session):
         """
@@ -263,13 +123,13 @@ class TestUserChangesBasicOperations:
         try:
             # Setup: Create multiple changes
             print(f"\n🔧 Setup: Creating 3 changes...")
-            change1 = create_test_user_change(
+            change1 = create_user_change(
                 api_session, repo_name, "file1.py", "old1", "new1", "Change 1"
             )
-            change2 = create_test_user_change(
+            change2 = create_user_change(
                 api_session, repo_name, "file2.py", "old2", "new2", "Change 2"
             )
-            change3 = create_test_user_change(
+            change3 = create_user_change(
                 api_session, repo_name, "file3.py", "old3", "new3", "Change 3"
             )
             
@@ -300,7 +160,7 @@ class TestUserChangesBasicOperations:
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            cleanup_test_user_changes(api_session)
+            cleanup_user_changes(api_session)
     
     def test_get_change_detail(self, api_session):
         """
@@ -322,7 +182,7 @@ class TestUserChangesBasicOperations:
         try:
             # Setup: Create change
             print(f"\n🔧 Setup: Creating change...")
-            change = create_test_user_change(
+            change = create_user_change(
                 api_session, repo_name, "detail_test.py", "original", "modified", "Detail test"
             )
             assert change is not None
@@ -347,7 +207,7 @@ class TestUserChangesBasicOperations:
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            cleanup_test_user_changes(api_session)
+            cleanup_user_changes(api_session)
     
     def test_delete_change(self, api_session):
         """
@@ -367,14 +227,14 @@ class TestUserChangesBasicOperations:
         
         # Setup: Create change
         print(f"\n🔧 Setup: Creating change...")
-        change = create_test_user_change(
+        change = create_user_change(
             api_session, repo_name, "to_delete.py", "old", "new", "To be deleted"
         )
         assert change is not None
         
         # Test: Delete change
         print(f"\n📤 Deleting change...")
-        success = delete_test_user_change(api_session, change['id'])
+        success = delete_user_change(api_session, change['id'])
         assert success, "Failed to delete change"
         
         # Verify: Change no longer exists
@@ -413,7 +273,7 @@ class TestUserChangesApprovalWorkflow:
         try:
             # Setup: Create pending change
             print(f"\n🔧 Setup: Creating pending change...")
-            change = create_test_user_change(
+            change = create_user_change(
                 api_session, repo_name, "approve_test.py", "old", "new", "To be approved"
             )
             assert change is not None
@@ -433,7 +293,7 @@ class TestUserChangesApprovalWorkflow:
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            cleanup_test_user_changes(api_session)
+            cleanup_user_changes(api_session)
     
     def test_reject_change(self, api_session):
         """
@@ -456,7 +316,7 @@ class TestUserChangesApprovalWorkflow:
         try:
             # Setup: Create pending change
             print(f"\n🔧 Setup: Creating pending change...")
-            change = create_test_user_change(
+            change = create_user_change(
                 api_session, repo_name, "reject_test.py", "old", "new", "To be rejected"
             )
             assert change is not None
@@ -476,7 +336,7 @@ class TestUserChangesApprovalWorkflow:
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            cleanup_test_user_changes(api_session)
+            cleanup_user_changes(api_session)
     
     def test_filter_changes_by_status(self, api_session):
         """
@@ -500,16 +360,16 @@ class TestUserChangesApprovalWorkflow:
         try:
             # Setup: Create changes with different statuses
             print(f"\n🔧 Setup: Creating changes with different statuses...")
-            pending1 = create_test_user_change(
+            pending1 = create_user_change(
                 api_session, repo_name, "pending1.py", "old", "new", "Pending 1"
             )
-            pending2 = create_test_user_change(
+            pending2 = create_user_change(
                 api_session, repo_name, "pending2.py", "old", "new", "Pending 2"
             )
-            to_approve = create_test_user_change(
+            to_approve = create_user_change(
                 api_session, repo_name, "approved.py", "old", "new", "To approve"
             )
-            to_reject = create_test_user_change(
+            to_reject = create_user_change(
                 api_session, repo_name, "rejected.py", "old", "new", "To reject"
             )
             
@@ -567,7 +427,7 @@ class TestUserChangesApprovalWorkflow:
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            cleanup_test_user_changes(api_session)
+            cleanup_user_changes(api_session)
 
 
 class TestUserChangesAdvanced:
@@ -599,7 +459,7 @@ This change addresses the security vulnerability in the login flow.
 - Improved error handling
 - Updated tests"""
             
-            change = create_test_user_change(
+            change = create_user_change(
                 api_session, repo_name, "auth.py", "old code", "new code", commit_msg
             )
             
@@ -611,7 +471,7 @@ This change addresses the security vulnerability in the login flow.
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            cleanup_test_user_changes(api_session)
+            cleanup_user_changes(api_session)
     
     def test_concurrent_changes_same_file(self, api_session):
         """
@@ -633,10 +493,10 @@ This change addresses the security vulnerability in the login flow.
         try:
             # Test: Create multiple changes for same file
             print(f"\n📤 Creating multiple changes for {file_path}...")
-            change1 = create_test_user_change(
+            change1 = create_user_change(
                 api_session, repo_name, file_path, "version 0", "version 1", "Change 1"
             )
-            change2 = create_test_user_change(
+            change2 = create_user_change(
                 api_session, repo_name, file_path, "version 0", "version 2", "Change 2"
             )
             
@@ -649,7 +509,7 @@ This change addresses the security vulnerability in the login flow.
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            cleanup_test_user_changes(api_session)
+            cleanup_user_changes(api_session)
     
     def test_commit_approved_changes(self, api_session):
         """
@@ -671,10 +531,10 @@ This change addresses the security vulnerability in the login flow.
         try:
             # Setup: Create and approve changes
             print(f"\n🔧 Setup: Creating and approving changes...")
-            change1 = create_test_user_change(
+            change1 = create_user_change(
                 api_session, repo_name, "file1.py", "old1", "new1", "Commit test 1"
             )
-            change2 = create_test_user_change(
+            change2 = create_user_change(
                 api_session, repo_name, "file2.py", "old2", "new2", "Commit test 2"
             )
             
@@ -719,4 +579,4 @@ This change addresses the security vulnerability in the login flow.
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            cleanup_test_user_changes(api_session)
+            cleanup_user_changes(api_session)

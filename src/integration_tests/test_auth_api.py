@@ -1,16 +1,38 @@
 """
-Integration tests for Authentication and User Management API endpoints.
+Integration tests for Authentication and User Management API.
+
+Tested Scenarios:
+- User login with valid credentials
+- User login with invalid credentials
+- Bearer token authentication
+- Invalid/expired token handling
+- Missing authorization header handling
+- /me endpoint (current user info)
+- User profile retrieval
+- User profile updates
+- API token creation
+- API token listing
+- API token deletion
+- Configured token validation
+
+Untested Scenarios / Gaps:
+- Password reset flow
+- Email verification
+- Two-factor authentication (2FA)
+- OAuth/SSO integration
+- Session management and expiration
+- Rate limiting on login attempts
+- User registration
+- Password change
+- Account deletion
+- Token refresh mechanism
+- Concurrent session handling
 
 Test Strategy:
 - Each test is completely independent
-- Each test creates its own artifacts before testing
-- Each test cleans up its artifacts after testing
-- Comprehensive logging for each test step
-
-Test Coverage:
-1. Authentication (login, logout, me endpoint, token auth)
-2. User profile management
-3. API token management
+- Tests use real backend with actual database
+- Proper cleanup in finally blocks
+- Comprehensive logging for debugging
 """
 import pytest
 import requests

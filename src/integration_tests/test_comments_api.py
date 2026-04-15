@@ -1,103 +1,62 @@
 """
 Integration tests for File Comments API.
 
-Tests cover:
-- Creating comments on files
+Tested Scenarios:
+- Creating comments on files (document-level and line-specific)
 - Listing comments by source URI
-- Filtering by resolved status
+- Filtering comments by resolved status
 - Updating comment text
-- Resolving/unresolving comments
+- Resolving and unresolving comments
 - Deleting comments
 - Comment threading (parent-child relationships)
-- Line anchoring
+- Line anchoring (start line, end line, line ranges)
+- Document-level comments with threaded replies
+- Line-specific comments with threaded replies
+- Mixed document and line comments with replies
+- Reply inheritance of parent context
+- Nested reply chains (multi-level threading)
+- Thread retrieval and structure verification
 
-Following TEST_STRUCTURE.md principles:
-- Independent tests with proper setup/teardown
-- Comprehensive logging
-- Idempotent operations
-- Reusable helper functions
+Untested Scenarios / Gaps:
+- Comment permissions (who can edit/delete others' comments)
+- Comment notifications
+- Comment mentions (@username)
+- Comment attachments
+- Bulk comment operations
+- Comment search/filtering by author or date
+- Comment versioning/edit history
+- Maximum thread depth limits
+- Comment ordering within threads
+- Thread collapsing/expanding
+- Thread locking/archiving
+- Cross-document thread references
+- Thread search and filtering
+- Thread export
+- Thread permissions (who can reply)
+- Thread moderation and spam detection
+
+Test Strategy:
+- Each test is completely independent
+- Tests use real backend with actual database
+- Proper cleanup in finally blocks
+- Comprehensive logging for debugging
+- Uses centralized helpers from test_helpers.py
 """
 import pytest
 import requests
-from .test_helpers import create_space, delete_space, get_unique_id
+from .test_helpers import (
+    create_space,
+    delete_space,
+    get_unique_id,
+    create_comment,
+    delete_comment,
+    cleanup_test_comments
+)
 
 
 # ============================================================================
-# Helper Functions
+# Local Helper Functions (specific to comments tests)
 # ============================================================================
-
-def create_test_comment(api_session, source_uri: str, line_start: int, line_end: int, text: str, parent_id=None):
-    """
-    Create a test comment.
-    
-    Args:
-        api_session: API session fixture
-        source_uri: Source URI for the comment
-        line_start: Starting line number
-        line_end: Ending line number
-        text: Comment text
-        parent_id: Optional parent comment ID for threading
-    
-    Returns:
-        dict: Created comment data or None if failed
-    """
-    try:
-        payload = {
-            "source_uri": source_uri,
-            "line_start": line_start,
-            "line_end": line_end,
-            "text": text
-        }
-        if parent_id:
-            payload["parent_comment"] = parent_id
-        
-        response = requests.post(
-            f"{api_session.base_url}/api/wiki/v1/comments/",
-            json=payload,
-            headers=api_session.headers,
-            timeout=5
-        )
-        
-        if response.status_code == 201:
-            comment = response.json()
-            print(f"✅ Created test comment: {comment['id']}")
-            return comment
-        else:
-            print(f"⚠️  Failed to create comment: {response.status_code}")
-            return None
-    except Exception as e:
-        print(f"❌ Error creating comment: {e}")
-        return None
-
-
-def delete_test_comment(api_session, comment_id: str):
-    """
-    Delete a test comment.
-    
-    Args:
-        api_session: API session fixture
-        comment_id: Comment ID to delete
-    
-    Returns:
-        bool: True if deleted successfully
-    """
-    try:
-        response = requests.delete(
-            f"{api_session.base_url}/api/wiki/v1/comments/{comment_id}/",
-            headers=api_session.headers,
-            timeout=5
-        )
-        
-        if response.status_code in [200, 204]:
-            print(f"✅ Deleted test comment: {comment_id}")
-            return True
-        else:
-            print(f"⚠️  Failed to delete comment {comment_id}: {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ Error deleting comment {comment_id}: {e}")
-        return False
-
 
 def get_comments_for_source(api_session, source_uri: str):
     """
@@ -112,7 +71,8 @@ def get_comments_for_source(api_session, source_uri: str):
     """
     try:
         response = requests.get(
-            f"{api_session.base_url}/api/wiki/v1/comments/?source_uri={source_uri}",
+            f"{api_session.base_url}/api/wiki/v1/comments/",
+            params={"source_uri": source_uri},
             headers=api_session.headers,
             timeout=5
         )
@@ -123,24 +83,8 @@ def get_comments_for_source(api_session, source_uri: str):
             print(f"⚠️  Failed to get comments: {response.status_code}")
             return []
     except Exception as e:
-        print(f"❌ Error getting comments: {e}")
+        print(f"⚠️  Error getting comments: {e}")
         return []
-
-
-def cleanup_test_comments(api_session, source_uri: str):
-    """
-    Clean up all test comments for a source URI.
-    
-    Args:
-        api_session: API session fixture
-        source_uri: Source URI to clean up
-    """
-    try:
-        comments = get_comments_for_source(api_session, source_uri)
-        for comment in comments:
-            delete_test_comment(api_session, comment['id'])
-    except Exception as e:
-        print(f"⚠️  Error during comment cleanup: {e}")
 
 
 # ============================================================================
@@ -173,7 +117,7 @@ class TestCommentsBasicOperations:
             # Test: Create comment
             print(f"\n📤 Creating comment on {source_uri} lines 10-15...")
             comment_text = f"Test comment {test_id}"
-            comment = create_test_comment(api_session, source_uri, 10, 15, comment_text)
+            comment = create_comment(api_session, source_uri, comment_text, line_start=10, line_end=15)
             
             assert comment is not None, "Comment creation failed"
             assert comment['source_uri'] == source_uri
@@ -220,9 +164,9 @@ class TestCommentsBasicOperations:
         try:
             # Setup: Create multiple comments
             print(f"\n🔧 Setup: Creating 3 comments...")
-            comment1 = create_test_comment(api_session, source_uri, 10, 12, "Comment 1")
-            comment2 = create_test_comment(api_session, source_uri, 20, 25, "Comment 2")
-            comment3 = create_test_comment(api_session, source_uri, 30, 30, "Comment 3")
+            comment1 = create_comment(api_session, source_uri, "Comment 1", line_start=10, line_end=12)
+            comment2 = create_comment(api_session, source_uri, "Comment 2", line_start=20, line_end=25)
+            comment3 = create_comment(api_session, source_uri, "Comment 3", line_start=30, line_end=30)
             
             assert comment1 and comment2 and comment3, "Failed to create test comments"
             
@@ -263,7 +207,7 @@ class TestCommentsBasicOperations:
         try:
             # Setup: Create comment
             print(f"\n🔧 Setup: Creating comment...")
-            comment = create_test_comment(api_session, source_uri, 10, 15, "Original text")
+            comment = create_comment(api_session, source_uri, "Original text", line_start=10, line_end=15)
             assert comment is not None
             
             # Test: Update comment
@@ -306,12 +250,12 @@ class TestCommentsBasicOperations:
         
         # Setup: Create comment
         print(f"\n🔧 Setup: Creating comment...")
-        comment = create_test_comment(api_session, source_uri, 10, 15, "To be deleted")
+        comment = create_comment(api_session, source_uri, "To be deleted", line_start=10, line_end=15)
         assert comment is not None
         
         # Test: Delete comment
         print(f"\n📤 Deleting comment...")
-        success = delete_test_comment(api_session, comment['id'])
+        success = delete_comment(api_session, comment['id'])
         assert success, "Failed to delete comment"
         
         # Verify: Comment no longer in list
@@ -345,7 +289,7 @@ class TestCommentsResolution:
         try:
             # Setup: Create comment
             print(f"\n🔧 Setup: Creating unresolved comment...")
-            comment = create_test_comment(api_session, source_uri, 10, 15, "Needs resolution")
+            comment = create_comment(api_session, source_uri, "Needs resolution", line_start=10, line_end=15)
             assert comment is not None
             assert comment['is_resolved'] is False
             
@@ -389,7 +333,7 @@ class TestCommentsResolution:
         try:
             # Setup: Create and resolve comment
             print(f"\n🔧 Setup: Creating and resolving comment...")
-            comment = create_test_comment(api_session, source_uri, 10, 15, "Will be unresolved")
+            comment = create_comment(api_session, source_uri, "Will be unresolved", line_start=10, line_end=15)
             assert comment is not None
             
             # Resolve it first
@@ -441,9 +385,9 @@ class TestCommentsResolution:
         try:
             # Setup: Create comments with different statuses
             print(f"\n🔧 Setup: Creating resolved and unresolved comments...")
-            comment1 = create_test_comment(api_session, source_uri, 10, 12, "Unresolved 1")
-            comment2 = create_test_comment(api_session, source_uri, 20, 22, "Unresolved 2")
-            comment3 = create_test_comment(api_session, source_uri, 30, 32, "To be resolved")
+            comment1 = create_comment(api_session, source_uri, "Unresolved 1", line_start=10, line_end=12)
+            comment2 = create_comment(api_session, source_uri, "Unresolved 2", line_start=20, line_end=22)
+            comment3 = create_comment(api_session, source_uri, "To be resolved", line_start=30, line_end=32)
             
             assert comment1 and comment2 and comment3
             
@@ -515,12 +459,12 @@ class TestCommentsThreading:
         try:
             # Setup: Create parent comment
             print(f"\n🔧 Setup: Creating parent comment...")
-            parent = create_test_comment(api_session, source_uri, 10, 15, "Parent comment")
+            parent = create_comment(api_session, source_uri, "Parent comment", line_start=10, line_end=15)
             assert parent is not None
             
             # Test: Create reply
             print(f"\n📤 Creating reply to parent...")
-            reply = create_test_comment(api_session, source_uri, 10, 15, "Reply comment", parent_id=parent['id'])
+            reply = create_comment(api_session, source_uri, "Reply comment", line_start=10, line_end=15, parent_id=parent['id'])
             assert reply is not None
             assert reply['parent_comment'] == parent['id']
             
@@ -567,14 +511,14 @@ class TestCommentsThreading:
         try:
             # Test: Multi-line comment
             print(f"\n📤 Creating multi-line comment (lines 10-20)...")
-            multi_line = create_test_comment(api_session, source_uri, 10, 20, "Multi-line comment")
+            multi_line = create_comment(api_session, source_uri, "Multi-line comment", line_start=10, line_end=20)
             assert multi_line is not None
             assert multi_line['line_start'] == 10
             assert multi_line['line_end'] == 20
             
             # Test: Single-line comment
             print(f"\n📤 Creating single-line comment (line 50)...")
-            single_line = create_test_comment(api_session, source_uri, 50, 50, "Single-line comment")
+            single_line = create_comment(api_session, source_uri, "Single-line comment", line_start=50, line_end=50)
             assert single_line is not None
             assert single_line['line_start'] == 50
             assert single_line['line_end'] == 50
@@ -585,3 +529,368 @@ class TestCommentsThreading:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
             cleanup_test_comments(api_session, source_uri)
+    
+    def test_document_level_comment_with_replies(self, api_session):
+        """Test creating document-level comment with nested replies."""
+        print("\n" + "="*80)
+        print("TEST: Document-Level Comment with Nested Replies")
+        print("="*80)
+        print("Purpose: Verify document comments support multi-level threaded replies")
+        print("Expected: Parent comment has no line anchoring, replies form nested structure")
+        
+        import uuid
+        source_uri = f"git://test-repo/main/test-doc-comments-{uuid.uuid4()}.py"
+        parent_id = None
+        reply1_id = None
+        reply2_id = None
+        nested_reply_id = None
+        
+        try:
+            # Step 1: Create document-level comment (no line_start/line_end)
+            print(f"\n📤 Step 1: Creating document-level comment...")
+            parent = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="This is a document-level comment about the entire file"
+            )
+            assert parent is not None, "Failed to create parent comment"
+            parent_id = parent['id']
+            
+            print(f"\n✅ Document comment created:")
+            print(f"   ID: {parent_id}")
+            print(f"   Line Start: {parent.get('line_start')}")
+            print(f"   Line End: {parent.get('line_end')}")
+            
+            # Verify it's a document-level comment
+            assert parent.get('line_start') is None, "Document comment should have no line_start"
+            assert parent.get('line_end') is None, "Document comment should have no line_end"
+            
+            # Step 2: Add first reply to document comment
+            print(f"\n📤 Step 2: Adding first reply to document comment...")
+            reply1 = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="I agree with this document-level observation",
+                parent_id=parent_id
+            )
+            assert reply1 is not None, "Failed to create reply1"
+            reply1_id = reply1['id']
+            print(f"   ✓ Reply 1 created (ID: {reply1_id})")
+            assert reply1.get('parent_id') == parent_id, f"Reply should have parent_id={parent_id}"
+            
+            # Step 3: Add second reply to document comment
+            print(f"\n📤 Step 3: Adding second reply to document comment...")
+            reply2 = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="Another perspective on the document",
+                parent_id=parent_id
+            )
+            assert reply2 is not None, "Failed to create reply2"
+            reply2_id = reply2['id']
+            print(f"   ✓ Reply 2 created (ID: {reply2_id})")
+            
+            # Step 4: Add nested reply (reply to reply)
+            print(f"\n📤 Step 4: Adding nested reply (reply to reply1)...")
+            nested_reply = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="Responding to the first reply",
+                parent_id=reply1_id
+            )
+            assert nested_reply is not None, "Failed to create nested reply"
+            nested_reply_id = nested_reply['id']
+            print(f"   ✓ Nested reply created (ID: {nested_reply_id})")
+            assert nested_reply.get('parent_id') == reply1_id, f"Nested reply should have parent_id={reply1_id}"
+            
+            # Step 5: Retrieve all comments and verify structure
+            print(f"\n📤 Step 5: Retrieving all comments for source_uri...")
+            response = requests.get(
+                f"{api_session.base_url}/api/wiki/v1/comments/?source_uri={source_uri}",
+                headers=api_session.headers
+            )
+            
+            assert response.status_code == 200, f"Failed to list comments: {response.text}"
+            root_comments = response.json()
+            print(f"   ✓ Retrieved {len(root_comments)} root comment(s)")
+            
+            # Verify nested structure
+            assert len(root_comments) == 1, f"Should have 1 root comment, got {len(root_comments)}"
+            
+            parent_from_list = root_comments[0]
+            assert parent_from_list['id'] == parent_id, "Root comment ID mismatch"
+            assert parent_from_list.get('line_start') is None, "Parent should have no line_start"
+            
+            replies = parent_from_list.get('replies', [])
+            assert len(replies) == 2, f"Parent should have 2 direct replies, got {len(replies)}"
+            
+            reply1_from_list = next((r for r in replies if r['id'] == reply1_id), None)
+            assert reply1_from_list is not None, "Reply1 not found in parent's replies"
+            
+            nested_replies = reply1_from_list.get('replies', [])
+            assert len(nested_replies) == 1, f"Reply1 should have 1 nested reply, got {len(nested_replies)}"
+            assert nested_replies[0]['id'] == nested_reply_id, "Nested reply ID mismatch"
+            
+            print(f"\n✅ PASS: Document-level threading works correctly")
+            print(f"   Structure:")
+            print(f"   - Document comment (ID: {parent_id})")
+            print(f"     ├─ Reply 1 (ID: {reply1_id})")
+            print(f"     │  └─ Nested reply (ID: {nested_reply_id})")
+            print(f"     └─ Reply 2 (ID: {reply2_id})")
+            
+        finally:
+            # Cleanup
+            print(f"\n🧹 Cleaning up comments...")
+            for comment_id in [nested_reply_id, reply2_id, reply1_id, parent_id]:
+                if comment_id:
+                    delete_comment(api_session, comment_id)
+            print(f"   ✓ All comments deleted")
+        
+        print("="*80)
+    
+    def test_line_specific_comment_with_replies(self, api_session):
+        """Test creating line-specific comment with replies."""
+        print("\n" + "="*80)
+        print("TEST: Line-Specific Comment with Replies")
+        print("="*80)
+        print("Purpose: Verify line comments support threaded replies")
+        print("Expected: Parent comment has line anchoring, replies inherit context")
+        
+        import uuid
+        source_uri = f"git://test-repo/main/test-line-comments-{uuid.uuid4()}.py"
+        parent_id = None
+        reply_id = None
+        
+        try:
+            # Step 1: Create line-specific comment
+            print(f"\n📤 Step 1: Creating line-specific comment (line 42)...")
+            parent = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="This line has a bug",
+                line_start=42,
+                line_end=42
+            )
+            assert parent is not None, "Failed to create parent comment"
+            parent_id = parent['id']
+            
+            print(f"\n✅ Line comment created:")
+            print(f"   ID: {parent_id}")
+            print(f"   Line: {parent.get('line_start')}")
+            
+            # Verify it's a line-specific comment
+            assert parent.get('line_start') == 42, "Should have line_start=42"
+            assert parent.get('line_end') == 42, "Should have line_end=42"
+            
+            # Step 2: Add reply to line comment
+            print(f"\n📤 Step 2: Adding reply to line comment...")
+            reply = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="Good catch! Here's how to fix it...",
+                parent_id=parent_id
+            )
+            assert reply is not None, "Failed to create reply"
+            reply_id = reply['id']
+            print(f"   ✓ Reply created (ID: {reply_id})")
+            assert reply.get('parent_id') == parent_id, f"Reply should have parent_id={parent_id}"
+            
+            # Step 3: Retrieve comments and verify
+            print(f"\n📤 Step 3: Retrieving comments...")
+            response = requests.get(
+                f"{api_session.base_url}/api/wiki/v1/comments/?source_uri={source_uri}",
+                headers=api_session.headers
+            )
+            
+            assert response.status_code == 200, f"Failed to list comments: {response.text}"
+            root_comments = response.json()
+            print(f"   ✓ Retrieved {len(root_comments)} root comment(s)")
+            
+            assert len(root_comments) == 1, f"Should have 1 root comment, got {len(root_comments)}"
+            
+            parent_from_list = root_comments[0]
+            assert parent_from_list['id'] == parent_id, "Root comment ID mismatch"
+            assert parent_from_list.get('line_start') == 42, "Parent should have line_start=42"
+            
+            replies = parent_from_list.get('replies', [])
+            assert len(replies) == 1, f"Parent should have 1 reply, got {len(replies)}"
+            assert replies[0]['id'] == reply_id, "Reply ID mismatch"
+            
+            print(f"\n✅ PASS: Line-specific threading works correctly")
+            
+        finally:
+            # Cleanup
+            print(f"\n🧹 Cleaning up comments...")
+            for comment_id in [reply_id, parent_id]:
+                if comment_id:
+                    delete_comment(api_session, comment_id)
+            print(f"   ✓ All comments deleted")
+        
+        print("="*80)
+    
+    def test_mixed_document_and_line_comments(self, api_session):
+        """Test mixing document-level and line-specific comments with replies."""
+        print("\n" + "="*80)
+        print("TEST: Mixed Document and Line Comments")
+        print("="*80)
+        print("Purpose: Verify document and line comments don't interfere")
+        print("Expected: Each type maintains its own threading structure")
+        
+        import uuid
+        source_uri = f"git://test-repo/main/test-mixed-comments-{uuid.uuid4()}.py"
+        doc_id = None
+        line_id = None
+        doc_reply_id = None
+        line_reply_id = None
+        
+        try:
+            # Create document comment
+            print(f"\n📤 Creating document comment...")
+            doc_comment = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="Overall file structure looks good"
+            )
+            assert doc_comment is not None, "Failed to create document comment"
+            doc_id = doc_comment['id']
+            print(f"   ✓ Document comment (ID: {doc_id})")
+            
+            # Create line comment
+            print(f"\n📤 Creating line comment...")
+            line_comment = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="This line needs attention",
+                line_start=10,
+                line_end=10
+            )
+            assert line_comment is not None, "Failed to create line comment"
+            line_id = line_comment['id']
+            print(f"   ✓ Line comment (ID: {line_id})")
+            
+            # Add reply to document comment
+            print(f"\n📤 Adding reply to document comment...")
+            doc_reply = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="I agree about the structure",
+                parent_id=doc_id
+            )
+            assert doc_reply is not None, "Failed to create doc reply"
+            doc_reply_id = doc_reply['id']
+            print(f"   ✓ Reply to document (ID: {doc_reply_id})")
+            
+            # Add reply to line comment
+            print(f"\n📤 Adding reply to line comment...")
+            line_reply = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="Fixed in latest commit",
+                parent_id=line_id
+            )
+            assert line_reply is not None, "Failed to create line reply"
+            line_reply_id = line_reply['id']
+            print(f"   ✓ Reply to line (ID: {line_reply_id})")
+            
+            # Retrieve and verify
+            print(f"\n📤 Retrieving all comments...")
+            response = requests.get(
+                f"{api_session.base_url}/api/wiki/v1/comments/?source_uri={source_uri}",
+                headers=api_session.headers
+            )
+            assert response.status_code == 200
+            root_comments = response.json()
+            
+            assert len(root_comments) == 2, f"Should have 2 root comments, got {len(root_comments)}"
+            
+            # Find document and line comments
+            doc_from_list = next((c for c in root_comments if c['id'] == doc_id), None)
+            line_from_list = next((c for c in root_comments if c['id'] == line_id), None)
+            
+            assert doc_from_list is not None, "Document comment not found"
+            assert line_from_list is not None, "Line comment not found"
+            
+            # Verify document comment thread
+            assert doc_from_list.get('line_start') is None, "Doc comment should have no line"
+            doc_replies = doc_from_list.get('replies', [])
+            assert len(doc_replies) == 1, f"Doc comment should have 1 reply, got {len(doc_replies)}"
+            assert doc_replies[0]['id'] == doc_reply_id, "Doc reply ID mismatch"
+            
+            # Verify line comment thread
+            assert line_from_list.get('line_start') == 10, "Line comment should have line=10"
+            line_replies = line_from_list.get('replies', [])
+            assert len(line_replies) == 1, f"Line comment should have 1 reply, got {len(line_replies)}"
+            assert line_replies[0]['id'] == line_reply_id, "Line reply ID mismatch"
+            
+            print(f"\n✅ PASS: Mixed comments maintain separate threading")
+            print(f"   Document thread: {doc_id} → {doc_reply_id}")
+            print(f"   Line thread: {line_id} → {line_reply_id}")
+            
+        finally:
+            # Cleanup
+            print(f"\n🧹 Cleaning up comments...")
+            for comment_id in [line_reply_id, doc_reply_id, line_id, doc_id]:
+                if comment_id:
+                    delete_comment(api_session, comment_id)
+            print(f"   ✓ All comments deleted")
+        
+        print("="*80)
+    
+    def test_reply_without_line_anchoring_inherits_parent_context(self, api_session):
+        """Test that replies don't need line anchoring - they inherit from parent."""
+        print("\n" + "="*80)
+        print("TEST: Reply Inherits Parent Context")
+        print("="*80)
+        print("Purpose: Verify replies don't need explicit line_start/line_end")
+        print("Expected: Replies work with just parent_id field")
+        
+        import uuid
+        source_uri = f"git://test-repo/main/test-reply-inherit-{uuid.uuid4()}.py"
+        parent_id = None
+        reply_id = None
+        
+        try:
+            # Create line comment
+            print(f"\n📤 Creating line comment...")
+            parent = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="This block of code is complex",
+                line_start=25,
+                line_end=30
+            )
+            assert parent is not None, "Failed to create parent comment"
+            parent_id = parent['id']
+            
+            # Create reply WITHOUT line_start/line_end
+            print(f"\n📤 Creating reply without line anchoring...")
+            reply = create_comment(
+                api_session,
+                source_uri=source_uri,
+                text="We should refactor this",
+                parent_id=parent_id
+                # Note: NO line_start or line_end
+            )
+            
+            assert reply is not None, "Reply should work without line anchoring"
+            reply_id = reply['id']
+            
+            print(f"   ✓ Reply created (ID: {reply_id})")
+            print(f"   Parent ID: {reply.get('parent_id')}")
+            print(f"   Line Start: {reply.get('line_start')}")
+            print(f"   Line End: {reply.get('line_end')}")
+            
+            # Verify reply has parent
+            assert reply.get('parent_id') == parent_id, "Should have parent_id"
+            
+            print(f"\n✅ PASS: Replies work without explicit line anchoring")
+            
+        finally:
+            # Cleanup
+            print(f"\n🧹 Cleaning up comments...")
+            for comment_id in [reply_id, parent_id]:
+                if comment_id:
+                    delete_comment(api_session, comment_id)
+            print(f"   ✓ All comments deleted")
+        
+        print("="*80)

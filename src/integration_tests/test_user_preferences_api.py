@@ -1,11 +1,35 @@
 """
-Integration tests for User Preferences API endpoints.
+Integration tests for User Preferences API.
 
-Test Coverage:
-- Favorites (add, list, remove)
-- Recent spaces (tracking, listing)
+Tested Scenarios:
+- Adding spaces to favorites
+- Listing favorite spaces
+- Removing spaces from favorites
+- Tracking recently visited spaces
+- Listing recent spaces
+- Automatic recent space tracking on visit
 
-Each test is independent and cleans up after itself.
+Untested Scenarios / Gaps:
+- Favorite ordering/sorting
+- Favorite limits (max number of favorites)
+- Recent spaces limit (max number tracked)
+- Recent spaces ordering by visit time
+- Favorite folders/collections
+- Sharing favorites between users
+- Exporting/importing favorites
+- Favorite notifications
+- User preferences for UI settings
+- Theme preferences
+- Language preferences
+- Notification preferences
+- Display preferences (view modes, layouts)
+- Keyboard shortcuts preferences
+
+Test Strategy:
+- Each test is completely independent
+- Tests use real backend with actual database
+- Proper cleanup in finally blocks
+- Comprehensive logging for debugging
 """
 import pytest
 import requests

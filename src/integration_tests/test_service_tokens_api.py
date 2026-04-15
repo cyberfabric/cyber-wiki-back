@@ -1,19 +1,36 @@
 """
-Integration tests for Service Tokens API endpoints.
+Integration tests for Service Tokens API.
+
+Tested Scenarios:
+- Listing all service tokens for a user
+- Creating service tokens (custom_header, github, bitbucket_server)
+- Deleting service tokens
+- Retrieving specific token details
+- Token encryption verification (tokens are encrypted at rest)
+- Updating service tokens
+
+Untested Scenarios / Gaps:
+- Token usage in actual git provider API calls
+- Token expiration and renewal
+- Token permissions and scopes
+- Token sharing between users/teams
+- Token audit logging
+- Token rate limiting
+- Multiple tokens for same service type
+- Token validation against actual services
+- Token rotation policies
+- Bulk token operations
+- Token import/export
 
 Test Strategy:
 - Each test is completely independent
-- Each test creates its own artifacts before testing
-- Each test cleans up its artifacts after testing
-- Comprehensive logging for each test step
-
-Test Coverage:
-1. Service token CRUD operations
-2. Token encryption verification
-3. Different service types (custom_header, github, bitbucket)
+- Tests use real backend with actual database
+- Proper cleanup in finally blocks
+- Comprehensive logging for debugging
 """
 import pytest
 import requests
+from .test_helpers import create_service_token, delete_service_token
 
 
 # ============================================================================
@@ -65,41 +82,31 @@ class TestServiceTokens:
         
         # Test: Create token
         print(f"\n📤 Creating custom_header service token...")
-        create_response = requests.post(
-            f"{api_session.base_url}/api/service-tokens/v1/tokens/",
-            json={
-                "service_type": "custom_header",
-                "header_name": "X-Test-Token",
-                "token": "test_token_value_12345",
-                "name": "Integration Test Token"
-            },
-            headers=api_session.headers
+        token = create_service_token(
+            api_session,
+            service_type="custom_header",
+            name="Integration Test Token",
+            header_name="X-Test-Token",
+            token="test_token_value_12345"
         )
         
-        print(f"📥 Response: HTTP {create_response.status_code}")
-        assert create_response.status_code == 201, f"Failed: {create_response.text}"
-        
-        data = create_response.json()
-        token_id = data["id"]
+        assert token is not None, "Failed to create token"
+        token_id = token["id"]
         
         print(f"\n🔍 Verifying created token...")
-        assert data["service_type"] == "custom_header"
-        print(f"   ✓ Service type: {data['service_type']}")
+        assert token["service_type"] == "custom_header"
+        print(f"   ✓ Service type: {token['service_type']}")
         
-        assert data["name"] == "Integration Test Token"
-        print(f"   ✓ Name: {data['name']}")
+        assert token["name"] == "Integration Test Token"
+        print(f"   ✓ Name: {token['name']}")
         
         print(f"   ✓ Token ID: {token_id}")
         
         # Test: Delete the token
         print(f"\n📤 Deleting service token {token_id}...")
-        delete_response = requests.delete(
-            f"{api_session.base_url}/api/service-tokens/v1/tokens/{token_id}/",
-            headers=api_session.headers
-        )
+        success = delete_service_token(api_session, token_id)
         
-        print(f"📥 Response: HTTP {delete_response.status_code}")
-        assert delete_response.status_code in [204, 200], f"Failed: {delete_response.text}"
+        assert success, "Failed to delete token"
         
         print(f"\n✅ PASS: Service token created and deleted successfully")
         print("="*80)
@@ -114,18 +121,15 @@ class TestServiceTokens:
         
         # Setup: Create a token
         print(f"\n🔧 Setup: Creating service token...")
-        create_response = requests.post(
-            f"{api_session.base_url}/api/service-tokens/v1/tokens/",
-            json={
-                "service_type": "custom_header",
-                "header_name": "X-Detail-Test",
-                "token": "detail_test_token_12345",
-                "name": "Detail Test Token"
-            },
-            headers=api_session.headers
+        token = create_service_token(
+            api_session,
+            service_type="custom_header",
+            name="Detail Test Token",
+            header_name="X-Detail-Test",
+            token="detail_test_token_12345"
         )
-        assert create_response.status_code == 201, f"Setup failed: {create_response.text}"
-        token_id = create_response.json()["id"]
+        assert token is not None, "Setup failed"
+        token_id = token["id"]
         print(f"   ✓ Created token {token_id}")
         
         try:
@@ -156,11 +160,7 @@ class TestServiceTokens:
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            delete_response = requests.delete(
-                f"{api_session.base_url}/api/service-tokens/v1/tokens/{token_id}/",
-                headers=api_session.headers
-            )
-            if delete_response.status_code in [200, 204]:
+            if delete_service_token(api_session, token_id):
                 print(f"   ✓ Deleted token {token_id}")
                 
         print("="*80)
@@ -176,25 +176,20 @@ class TestServiceTokens:
         # Test: Create a token with sensitive data
         secret_value = "super_secret_value_12345"
         print(f"\n📤 Creating token with secret value...")
-        create_response = requests.post(
-            f"{api_session.base_url}/api/service-tokens/v1/tokens/",
-            json={
-                "service_type": "custom_header",
-                "header_name": "X-Secret-Token",
-                "token": secret_value,
-                "name": "Encryption Test Token"
-            },
-            headers=api_session.headers
+        token = create_service_token(
+            api_session,
+            service_type="custom_header",
+            name="Encryption Test Token",
+            header_name="X-Secret-Token",
+            token=secret_value
         )
         
-        print(f"📥 Response: HTTP {create_response.status_code}")
-        assert create_response.status_code == 201, f"Failed: {create_response.text}"
-        
-        token_id = create_response.json()["id"]
+        assert token is not None, "Failed to create token"
+        token_id = token["id"]
         
         try:
             print(f"\n🔍 Verifying encryption...")
-            data = create_response.json()
+            data = token
             
             # Verify token is not returned in plain text
             if "token" in data:
@@ -212,11 +207,7 @@ class TestServiceTokens:
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            delete_response = requests.delete(
-                f"{api_session.base_url}/api/service-tokens/v1/tokens/{token_id}/",
-                headers=api_session.headers
-            )
-            if delete_response.status_code in [200, 204]:
+            if delete_service_token(api_session, token_id):
                 print(f"   ✓ Deleted token {token_id}")
                 
         print("="*80)
@@ -231,18 +222,15 @@ class TestServiceTokens:
         
         # Setup: Create a token
         print(f"\n🔧 Setup: Creating service token...")
-        create_response = requests.post(
-            f"{api_session.base_url}/api/service-tokens/v1/tokens/",
-            json={
-                "service_type": "custom_header",
-                "header_name": "X-Update-Test",
-                "token": "update_test_token_12345",
-                "name": "Update Test Token"
-            },
-            headers=api_session.headers
+        token = create_service_token(
+            api_session,
+            service_type="custom_header",
+            name="Update Test Token",
+            header_name="X-Update-Test",
+            token="update_test_token_12345"
         )
-        assert create_response.status_code == 201, f"Setup failed: {create_response.text}"
-        token_id = create_response.json()["id"]
+        assert token is not None, "Setup failed"
+        token_id = token["id"]
         print(f"   ✓ Created token {token_id}")
         
         try:
@@ -268,11 +256,7 @@ class TestServiceTokens:
         finally:
             # Cleanup
             print(f"\n🧹 Cleaning up...")
-            delete_response = requests.delete(
-                f"{api_session.base_url}/api/service-tokens/v1/tokens/{token_id}/",
-                headers=api_session.headers
-            )
-            if delete_response.status_code in [200, 204]:
+            if delete_service_token(api_session, token_id):
                 print(f"   ✓ Deleted token {token_id}")
                 
         print("="*80)

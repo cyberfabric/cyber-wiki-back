@@ -1,23 +1,46 @@
 """
-Integration tests for end-to-end scenarios.
+Integration tests for end-to-end workflows.
 
-Tests cover complete workflows combining multiple features:
-- Complete edit workflow (create space → edit file → approve → commit)
+Tested Scenarios:
+- Complete edit workflow (create space → create change → approve → commit)
 - Complete comment workflow (create space → add comments → resolve)
-- Enrichment aggregation (comments + diffs + enrichments)
-- Multi-user collaboration scenarios
+- Multiple enrichment types aggregation (comments + line ranges)
+- Enrichment type listing
+- Cross-feature integration (spaces + comments + changes)
 
-Following TEST_STRUCTURE.md principles:
-- Independent tests with proper setup/teardown
-- Comprehensive logging
-- Idempotent operations
-- Tests real user workflows
+Untested Scenarios / Gaps:
+- Multi-user collaboration (concurrent edits)
+- Conflict resolution workflows
+- Real git provider integration in workflows
+- Document synchronization workflows
+- Permission-based workflows (viewer/editor/admin)
+- Bulk operations workflows
+- Import/export workflows
+- Migration workflows
+- Rollback/undo workflows
+- Branching and merging workflows
+- Review and approval chains
+- Notification workflows
+
+Test Strategy:
+- Each test is completely independent
+- Tests use real backend with actual database
+- Tests real user workflows end-to-end
+- Proper cleanup in finally blocks
+- Comprehensive logging for debugging
 """
 import pytest
 import requests
-from .test_helpers import create_space, delete_space, get_unique_id
-from .test_comments_api import create_test_comment, cleanup_test_comments
-from .test_user_changes_api import create_test_user_change, approve_user_change, cleanup_test_user_changes
+from .test_helpers import (
+    create_space,
+    delete_space,
+    get_unique_id,
+    create_comment,
+    cleanup_test_comments,
+    create_user_change,
+    approve_user_change,
+    cleanup_test_user_changes
+)
 
 
 # ============================================================================
@@ -77,7 +100,7 @@ if __name__ == "__main__":
             
             # Step 3: Create pending change
             print(f"\n📤 Step 3: Creating pending change...")
-            change = create_test_user_change(
+            change = create_user_change(
                 api_session,
                 repo_name,
                 file_path,
@@ -162,12 +185,12 @@ class TestCommentWorkflow:
             
             # Step 2: Add comment
             print(f"\n📤 Step 2: Adding comment to file...")
-            parent_comment = create_test_comment(
+            parent_comment = create_comment(
                 api_session,
                 source_uri,
-                15,
-                20,
-                "This function needs better error handling"
+                "This needs review",
+                line_start=15,
+                line_end=15
             )
             assert parent_comment is not None
             assert parent_comment['is_resolved'] is False
@@ -175,12 +198,12 @@ class TestCommentWorkflow:
             
             # Step 3: Reply to comment
             print(f"\n📤 Step 3: Adding reply to comment...")
-            reply_comment = create_test_comment(
+            reply_comment = create_comment(
                 api_session,
                 source_uri,
-                15,
-                20,
-                "Good point! I'll add try-catch blocks",
+                "I'll take a look",
+                line_start=15,
+                line_end=15,
                 parent_id=parent_comment['id']
             )
             assert reply_comment is not None
@@ -258,14 +281,14 @@ class TestEnrichmentAggregation:
         try:
             # Step 1: Create comments
             print(f"\n📤 Step 1: Creating comments...")
-            comment1 = create_test_comment(api_session, source_uri, 10, 15, "Comment 1")
-            comment2 = create_test_comment(api_session, source_uri, 20, 25, "Comment 2")
+            comment1 = create_comment(api_session, source_uri, "Comment 1", line_start=10, line_end=15)
+            comment2 = create_comment(api_session, source_uri, "Comment 2", line_start=20, line_end=25)
             assert comment1 and comment2
             print(f"✅ Created 2 comments")
             
             # Step 2: Create pending change
             print(f"\n📤 Step 2: Creating pending change...")
-            change = create_test_user_change(
+            change = create_user_change(
                 api_session,
                 repo_name,
                 file_path,
@@ -335,9 +358,9 @@ class TestEnrichmentAggregation:
         try:
             # Create comments on different ranges
             print(f"\n📤 Creating comments on different line ranges...")
-            comment1 = create_test_comment(api_session, source_uri, 10, 15, "Lines 10-15")
-            comment2 = create_test_comment(api_session, source_uri, 20, 25, "Lines 20-25")
-            comment3 = create_test_comment(api_session, source_uri, 12, 18, "Lines 12-18 (overlaps)")
+            comment1 = create_comment(api_session, source_uri, "Lines 10-15", line_start=10, line_end=15)
+            comment2 = create_comment(api_session, source_uri, "Lines 20-25", line_start=20, line_end=25)
+            comment3 = create_comment(api_session, source_uri, "Lines 12-18 (overlaps)", line_start=12, line_end=18)
             
             assert comment1 and comment2 and comment3
             

@@ -1,19 +1,35 @@
 """
-Integration tests for Git Provider API endpoints.
+Integration tests for Git Provider API.
+
+Tested Scenarios:
+- Listing repositories from git provider (Bitbucket Server)
+- Retrieving file content from repository
+- Listing directory contents
+- Tree API with full paths (root level and subdirectories)
+- Nested path handling (Bitbucket collapsed paths)
+- Cache clearing for git provider responses
+
+Untested Scenarios / Gaps:
+- Repository search (skipped for Bitbucket Server)
+- Branch listing (skipped for Bitbucket Server)
+- Commit history retrieval
+- Diff generation between commits
+- File blame information
+- Repository webhooks
+- Multiple git provider types (GitHub, GitLab)
+- Git provider authentication failures
+- Large file handling
+- Binary file handling
+- Repository permissions
 
 Test Strategy:
 - Each test is completely independent
 - Tests skip gracefully if git provider not configured
-- Comprehensive logging for each test step
+- Tests use real git provider (Bitbucket Server)
+- Proper cleanup in finally blocks
+- Comprehensive logging for debugging
 
-Test Coverage:
-1. Repository listing and searching
-2. Branch operations
-3. File content retrieval
-4. Directory listing
-
-Note: These tests require service tokens to be configured via the web UI.
-They will skip if no git provider configuration is available.
+Note: Requires service tokens configured via web UI.
 """
 import pytest
 import requests
@@ -319,83 +335,42 @@ class TestGitProviderContent:
             
         print("="*80)
 
-
-def test_tree_returns_full_paths(api_session, git_provider_config, test_repository_config, skip_if_no_git_config):
-    """
-    Test that tree API returns full paths from repository root, not relative paths.
-    
-    This is critical for:
-    - File mapping lookups (must match by full path)
-    - Navigation (must know absolute position in tree)
-    - Enrichment matching (PRs reference full paths)
-    """
-    provider = git_provider_config["provider"]
-    base_url = git_provider_config.get("base_url", "")
-    project_key = test_repository_config["project_key"]
-    repo_slug = test_repository_config["repo_slug"]
-    branch = test_repository_config.get("branch", "master")
-    
-    print(f"\n{'='*80}")
-    print(f"🧪 TEST: Tree API Returns Full Paths")
-    print(f"{'='*80}")
-    print(f"   Provider: {provider}")
-    print(f"   Repository: {project_key}/{repo_slug}")
-    print(f"   Branch: {branch}")
-    
-    # Clear cache to ensure we get fresh results
-    print(f"\n🧹 Clearing API cache...")
-    clear_response = requests.delete(
-        f"{api_session.base_url}/api/user_management/v1/settings/cache",
-        headers=api_session.headers
-    )
-    if clear_response.status_code == 200:
-        cleared = clear_response.json().get('cleared', 0)
-        print(f"   ✓ Cache cleared ({cleared} entries)")
-    else:
-        print(f"   ⚠️  Cache clear returned {clear_response.status_code}")
-    
-    # Test 1: Root level - paths should not have leading slash
-    print(f"\n📋 Test 1: Root level paths")
-    response = requests.get(
-        f"{api_session.base_url}/api/git-provider/v1/tree",
-        params={
-            "provider": provider,
-            "base_url": base_url,
-            "project_key": project_key,
-            "repo_slug": repo_slug,
-            "branch": branch,
-            "recursive": "false"
-        },
-        headers=api_session.headers
-    )
-    assert response.status_code == 200, f"Failed to get tree: {response.text}"
-    root_items = response.json()
-    assert isinstance(root_items, list), "Tree should return a list"
-    assert len(root_items) > 0, "Tree should not be empty"
-    
-    # Check that root items don't contain nested paths
-    # (Bitbucket fix should collapse ".agents/skills" to ".agents")
-    nested_paths = []
-    for item in root_items[:10]:
-        path = item.get('path', '')
-        if '/' in path:
-            nested_paths.append(path)
-        print(f"   ✓ Root item: {path}")
-    
-    # Assert no nested paths at root level
-    assert len(nested_paths) == 0, (
-        f"Root level should not contain nested paths. Found: {nested_paths}\n"
-        f"The Bitbucket provider should collapse nested paths like '.agents/skills' to '.agents'"
-    )
-    
-    # Test 2: Subdirectory - paths should be full paths from root
-    # Find a directory in root
-    root_dir = next((item for item in root_items if item.get('type') in ['dir', 'directory']), None)
-    
-    if root_dir:
-        dir_path = root_dir['path']
-        print(f"\n📋 Test 2: Subdirectory paths (testing: {dir_path})")
+    def test_tree_returns_full_paths(self, api_session, git_provider_config, test_repository_config, skip_if_no_git_config):
+        """
+        Test that tree API returns full paths from repository root, not relative paths.
         
+        This is critical for:
+        - File mapping lookups (must match by full path)
+        - Navigation (must know absolute position in tree)
+        - Enrichment matching (PRs reference full paths)
+        """
+        provider = git_provider_config["provider"]
+        base_url = git_provider_config.get("base_url", "")
+        project_key = test_repository_config["project_key"]
+        repo_slug = test_repository_config["repo_slug"]
+        branch = test_repository_config.get("branch", "master")
+        
+        print(f"\n{'='*80}")
+        print(f"🧪 TEST: Tree API Returns Full Paths")
+        print(f"{'='*80}")
+        print(f"   Provider: {provider}")
+        print(f"   Repository: {project_key}/{repo_slug}")
+        print(f"   Branch: {branch}")
+        
+        # Clear cache to ensure we get fresh results
+        print(f"\n🧹 Clearing API cache...")
+        clear_response = requests.delete(
+            f"{api_session.base_url}/api/user_management/v1/settings/cache",
+            headers=api_session.headers
+        )
+        if clear_response.status_code == 200:
+            cleared = clear_response.json().get('cleared', 0)
+            print(f"   ✓ Cache cleared ({cleared} entries)")
+        else:
+            print(f"   ⚠️  Cache clear returned {clear_response.status_code}")
+        
+        # Test 1: Root level - paths should not have leading slash
+        print(f"\n📋 Test 1: Root level paths")
         response = requests.get(
             f"{api_session.base_url}/api/git-provider/v1/tree",
             params={
@@ -404,32 +379,72 @@ def test_tree_returns_full_paths(api_session, git_provider_config, test_reposito
                 "project_key": project_key,
                 "repo_slug": repo_slug,
                 "branch": branch,
-                "path": dir_path,
                 "recursive": "false"
             },
             headers=api_session.headers
         )
+        assert response.status_code == 200, f"Failed to get tree: {response.text}"
+        root_items = response.json()
+        assert isinstance(root_items, list), "Tree should return a list"
+        assert len(root_items) > 0, "Tree should not be empty"
         
-        if response.status_code == 200:
-            subdir_items = response.json()
+        # Check that root items don't contain nested paths
+        # (Bitbucket fix should collapse ".agents/skills" to ".agents")
+        nested_paths = []
+        for item in root_items[:10]:
+            path = item.get('path', '')
+            if '/' in path:
+                nested_paths.append(path)
+            print(f"   ✓ Root item: {path}")
+        
+        # Assert no nested paths at root level
+        assert len(nested_paths) == 0, (
+            f"Root level should not contain nested paths. Found: {nested_paths}\n"
+            f"The Bitbucket provider should collapse nested paths like '.agents/skills' to '.agents'"
+        )
+        
+        # Test 2: Subdirectory - paths should be full paths from root
+        # Find a directory in root
+        root_dir = next((item for item in root_items if item.get('type') in ['dir', 'directory']), None)
+        
+        if root_dir:
+            dir_path = root_dir['path']
+            print(f"\n📋 Test 2: Subdirectory paths (testing: {dir_path})")
             
-            if len(subdir_items) > 0:
-                # Verify subdirectory items have full paths
-                for item in subdir_items[:5]:  # Check first 5 items
-                    path = item.get('path', '')
-                    # Path should start with parent directory
-                    assert path.startswith(dir_path + '/'), \
-                        f"Subdirectory item should start with '{dir_path}/': got '{path}'"
-                    # Path should not be just the filename
-                    assert '/' in path, f"Subdirectory item should contain '/': {path}"
-                    print(f"   ✓ Full path: {path}")
+            response = requests.get(
+                f"{api_session.base_url}/api/git-provider/v1/tree",
+                params={
+                    "provider": provider,
+                    "base_url": base_url,
+                    "project_key": project_key,
+                    "repo_slug": repo_slug,
+                    "branch": branch,
+                    "path": dir_path,
+                    "recursive": "false"
+                },
+                headers=api_session.headers
+            )
+            
+            if response.status_code == 200:
+                subdir_items = response.json()
                 
-                print(f"\n✅ PASS: All paths are full paths from repository root")
+                if len(subdir_items) > 0:
+                    # Verify subdirectory items have full paths
+                    for item in subdir_items[:5]:  # Check first 5 items
+                        path = item.get('path', '')
+                        # Path should start with parent directory
+                        assert path.startswith(dir_path + '/'), \
+                            f"Subdirectory item should start with '{dir_path}/': got '{path}'"
+                        # Path should not be just the filename
+                        assert '/' in path, f"Subdirectory item should contain '/': {path}"
+                        print(f"   ✓ Full path: {path}")
+                    
+                    print(f"\n✅ PASS: All paths are full paths from repository root")
+                else:
+                    print(f"   ⚠️  Directory is empty, skipping validation")
             else:
-                print(f"   ⚠️  Directory is empty, skipping validation")
+                print(f"   ⚠️  Could not access subdirectory (status: {response.status_code})")
         else:
-            print(f"   ⚠️  Could not access subdirectory (status: {response.status_code})")
-    else:
-        print(f"   ⚠️  No directories found in root, skipping subdirectory test")
-    
-    print("="*80)
+            print(f"   ⚠️  No directories found in root, skipping subdirectory test")
+        
+        print("="*80)
