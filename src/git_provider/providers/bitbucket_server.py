@@ -2,8 +2,11 @@
 Bitbucket Server provider implementation.
 """
 import requests
+import logging
 from typing import List, Dict, Any, Optional
 from ..base import BaseGitProvider
+
+logger = logging.getLogger(__name__)
 
 
 class BitbucketServerProvider(BaseGitProvider):
@@ -243,6 +246,7 @@ class BitbucketServerProvider(BaseGitProvider):
     
     def get_directory_tree(self, project_key: str, repo_slug: str, path: str = '', branch: str = 'main', recursive: bool = False) -> List[Dict[str, Any]]:
         """Get directory tree."""
+        logger.info(f"[TREE_FIX] get_directory_tree called: path='{path}', branch='{branch}'")
         
         endpoint = f'/projects/{project_key}/repos/{repo_slug}/browse'
         if path:
@@ -257,14 +261,60 @@ class BitbucketServerProvider(BaseGitProvider):
         children = data.get('children', {}).get('values', [])
         
         results = []
+        seen_paths = set()
+        
         for child in children:
-            results.append(self._normalize_tree_entry(child))
+            full_path = self._normalize_tree_entry(child, path)['path']
+            
+            # Bitbucket sometimes returns nested paths (e.g., ".agents/skills" at root level)
+            # We need to only show immediate children
+            if path:
+                # For subdirectories, check if this is an immediate child
+                expected_prefix = path + '/'
+                if not full_path.startswith(expected_prefix):
+                    continue
+                # Get the relative path after the parent
+                relative_path = full_path[len(expected_prefix):]
+                # If there's a slash, it's not an immediate child
+                if '/' in relative_path:
+                    # Extract the immediate child directory
+                    immediate_child = relative_path.split('/')[0]
+                    immediate_path = f"{path}/{immediate_child}"
+                    # Only add if we haven't seen this immediate child yet
+                    if immediate_path not in seen_paths:
+                        seen_paths.add(immediate_path)
+                        results.append({
+                            'path': immediate_path,
+                            'type': 'dir',
+                            'size': 0,
+                            'sha': '',
+                        })
+                    continue
+            else:
+                # For root level, check if path contains slashes
+                if '/' in full_path:
+                    # Extract the top-level directory
+                    top_level = full_path.split('/')[0]
+                    logger.info(f"[TREE_FIX] Bitbucket returned nested path at root: '{full_path}' -> extracting '{top_level}'")
+                    # Only add if we haven't seen this top-level directory yet
+                    if top_level not in seen_paths:
+                        seen_paths.add(top_level)
+                        results.append({
+                            'path': top_level,
+                            'type': 'dir',
+                            'size': 0,
+                            'sha': '',
+                        })
+                    continue
+            
+            # This is an immediate child, add it normally
+            results.append(self._normalize_tree_entry(child, path))
             
             # Recursively get subdirectories if requested
             if recursive and child.get('type') == 'DIRECTORY':
                 subpath = f"{path}/{child.get('path', {}).get('name', '')}" if path else child.get('path', {}).get('name', '')
                 try:
-                    results.extend(self.get_directory_tree(repo_id, subpath, branch, recursive))
+                    results.extend(self.get_directory_tree(project_key, repo_slug, subpath, branch, recursive))
                 except Exception:
                     # Skip directories that can't be accessed (permissions, symlinks, etc.)
                     pass
@@ -489,11 +539,14 @@ class BitbucketServerProvider(BaseGitProvider):
             'updated_at': '',
         }
     
-    def _normalize_tree_entry(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_tree_entry(self, entry: Dict[str, Any], parent_path: str = '') -> Dict[str, Any]:
         """Normalize tree entry."""
         path_info = entry.get('path', {})
+        filename = path_info.get('toString', '')
+        # Construct full path from parent path and filename
+        full_path = f"{parent_path}/{filename}" if parent_path else filename
         return {
-            'path': path_info.get('toString', ''),
+            'path': full_path,
             'type': 'dir' if entry.get('type') == 'DIRECTORY' else 'file',
             'size': entry.get('size', 0),
             'sha': '',

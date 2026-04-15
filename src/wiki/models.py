@@ -681,8 +681,9 @@ class FileMapping(models.Model):
             ('first_h2', 'First H2 Header'),
             ('title_frontmatter', 'Title from Frontmatter'),
         ],
-        default='first_h1',
-        help_text='Method for determining display name for this item'
+        null=True,
+        blank=True,
+        help_text='Method for determining display name for this item (null = inherit from parent or space default)'
     )
     children_display_name_source = models.CharField(
         max_length=50,
@@ -797,33 +798,56 @@ class FileMapping(models.Model):
         Compute effective display_name_source and is_visible after inheritance.
         Returns tuple: (effective_source, effective_visible)
         """
-        # Folders always use filename or custom (no inheritance)
+        # Determine display name source
         if self.is_folder:
+            # Folders always use filename or custom (no inheritance for display name)
             source = self.display_name_source or 'filename'
-            return (source, self.is_visible)
+        elif self.display_name_source:
+            # Files with explicit setting use it
+            source = self.display_name_source
+        else:
+            # Files: Walk up parent folders for children_display_name_source
+            source = None
+            path_parts = self.file_path.split('/')
+            
+            for i in range(len(path_parts) - 1, 0, -1):
+                parent_path = '/'.join(path_parts[:i])
+                try:
+                    parent = FileMapping.objects.get(
+                        space=self.space,
+                        file_path=parent_path,
+                        is_folder=True
+                    )
+                    if parent.children_display_name_source:
+                        source = parent.children_display_name_source
+                        break
+                except FileMapping.DoesNotExist:
+                    continue
+            
+            # Files: Fall back to space default if no parent rule found
+            if source is None:
+                source = self.space.default_display_name_source or 'first_h1'
         
-        # Files: Check if explicitly set
-        if self.display_name_source:
-            return (self.display_name_source, self.is_visible)
+        # Determine visibility - check entire parent chain
+        # If ANY parent is hidden, this item should be hidden
+        visible = self.is_visible
+        if visible:  # Only check parents if this item itself is visible
+            path_parts = self.file_path.split('/')
+            for i in range(len(path_parts) - 1, 0, -1):
+                parent_path = '/'.join(path_parts[:i])
+                try:
+                    parent = FileMapping.objects.get(
+                        space=self.space,
+                        file_path=parent_path,
+                        is_folder=True
+                    )
+                    if not parent.is_visible:
+                        visible = False
+                        break
+                except FileMapping.DoesNotExist:
+                    continue
         
-        # Files: Walk up parent folders for children_display_name_source
-        path_parts = self.file_path.split('/')
-        for i in range(len(path_parts) - 1, 0, -1):
-            parent_path = '/'.join(path_parts[:i])
-            try:
-                parent = FileMapping.objects.get(
-                    space=self.space,
-                    file_path=parent_path,
-                    is_folder=True
-                )
-                if parent.children_display_name_source:
-                    return (parent.children_display_name_source, parent.is_visible)
-            except FileMapping.DoesNotExist:
-                continue
-        
-        # Files: Fall back to space default
-        source = self.space.default_display_name_source or 'first_h1'
-        return (source, True)
+        return (source, visible)
     
     def save(self, *args, **kwargs):
         """Override save to compute effective values."""

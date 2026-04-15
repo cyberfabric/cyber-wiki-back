@@ -62,10 +62,17 @@ class ServiceTokenViewSet(viewsets.ModelViewSet):
         name = serializer.validated_data.get('name')
         
         # Try to get existing token or create new one
+        # For custom_header tokens, include header_name in the lookup
+        lookup_fields = {
+            'user': request.user,
+            'service_type': service_type,
+            'base_url': base_url,
+        }
+        if service_type == 'custom_header':
+            lookup_fields['header_name'] = header_name
+        
         service_token, created = ServiceToken.objects.get_or_create(
-            user=request.user,
-            service_type=service_type,
-            base_url=base_url,
+            **lookup_fields,
             defaults={
                 'header_name': header_name,
                 'name': name,

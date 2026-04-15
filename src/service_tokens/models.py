@@ -70,7 +70,20 @@ class ServiceToken(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
-        unique_together = [['user', 'service_type', 'base_url']]
+        # For custom_header tokens, we need header_name in the unique constraint
+        # to allow multiple custom headers per user
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'service_type', 'base_url', 'header_name'],
+                condition=models.Q(service_type='custom_header'),
+                name='unique_custom_header_per_user'
+            ),
+            models.UniqueConstraint(
+                fields=['user', 'service_type', 'base_url'],
+                condition=~models.Q(service_type='custom_header'),
+                name='unique_service_token_per_user'
+            ),
+        ]
         verbose_name = 'Service Token'
         verbose_name_plural = 'Service Tokens'
         ordering = ['-created_at']

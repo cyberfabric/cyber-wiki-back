@@ -79,21 +79,16 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
                         logger.debug(f"[PR] No diff available for PR #{pr['number']}")
                         continue
                     
-                    # Check if file is modified in this PR
-                    file_is_modified = address.path in diff_text
+                    # Parse diff to extract hunks for this file
+                    # This will return empty list if file is not actually modified
+                    logger.debug(f"[PR] Parsing diff for file: {address.path}, diff length: {len(diff_text)} chars")
+                    hunks = self._parse_diff_hunks(diff_text, address.path)
                     
                     pr_file_duration = time.time() - pr_file_start
-                    logger.debug(f"[PR] Check PR #{pr['number']} took {pr_file_duration:.3f}s (match: {file_is_modified})")
+                    logger.debug(f"[PR] Check PR #{pr['number']} took {pr_file_duration:.3f}s (hunks: {len(hunks)})")
                     
-                    if file_is_modified:
-                        # Parse diff to extract hunks for this file
-                        logger.debug(f"[PR] Parsing diff for file: {address.path}, diff length: {len(diff_text)} chars")
-                        # Show first few lines of diff to understand format
-                        diff_lines = diff_text.split('\n')[:10]
-                        logger.debug(f"[PR] First 10 lines of diff:\n" + '\n'.join(diff_lines))
-                        hunks = self._parse_diff_hunks(diff_text, address.path)
-                        logger.debug(f"[PR] Found {len(hunks)} hunks for PR #{pr['number']}")
-                        
+                    # Only add enrichment if we found actual hunks for this file
+                    if hunks:
                         enrichments.append({
                             'type': 'pr_diff',
                             'pr_number': pr['number'],
@@ -158,8 +153,8 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
                 if marker_file.startswith('a/') or marker_file.startswith('b/'):
                     marker_file = marker_file[2:]  # Remove a/ or b/ prefix
                 
-                # Match only if exact match
-                # file_path from source_uri is the full path (e.g., "tools/standctl/.trufflehog3.yml" or ".trufflehog3.yml")
+                # Match only if exact path match
+                # file_path from source_uri is the full path (e.g., "tools/standctl/.trufflehog3.yml" or "README.md")
                 is_match = (marker_file == file_path)
                 
                 if is_match:
@@ -167,6 +162,9 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
                     logger.debug(f"[PR] Matched our file: {line} (looking for: {file_path})")
                 elif marker_file:  # Only exit if we see a non-empty different file
                     # We're entering a different file's section
+                    # Log all file markers we see to help debug
+                    if file_marker_count <= 10:  # Only log first 10 to avoid spam
+                        logger.debug(f"[PR] Saw different file: {marker_file} (looking for: {file_path})")
                     in_file = False
                 continue
             
