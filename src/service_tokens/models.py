@@ -3,7 +3,6 @@ Service token models for storing encrypted credentials for various services.
 """
 import uuid
 import logging
-import traceback
 from django.db import models
 from django.contrib.auth.models import User
 from django.conf import settings
@@ -138,16 +137,14 @@ def log_service_token_save(sender, instance, created, **kwargs):
     action = "CREATED" if created else "UPDATED"
     
     if instance.service_type == ServiceType.CUSTOM_HEADER:
-        logger.warning(
+        logger.debug(
             f"[SERVICE_TOKEN] {action} CUSTOM_HEADER token: "
             f"id={instance.id}, user={instance.user.username}, "
             f"name={instance.name}, header_name={instance.header_name}, "
             f"base_url={instance.base_url}"
         )
-        # Log stack trace to see who created/updated it
-        logger.info(f"[SERVICE_TOKEN] Stack trace:\n{''.join(traceback.format_stack())}")
     else:
-        logger.info(
+        logger.debug(
             f"[SERVICE_TOKEN] {action}: "
             f"id={instance.id}, user={instance.user.username}, "
             f"type={instance.service_type}, base_url={instance.base_url}"
@@ -158,16 +155,14 @@ def log_service_token_save(sender, instance, created, **kwargs):
 def log_service_token_delete(sender, instance, **kwargs):
     """Log when a service token is about to be deleted."""
     if instance.service_type == ServiceType.CUSTOM_HEADER:
-        logger.error(
+        logger.debug(
             f"[SERVICE_TOKEN] DELETING CUSTOM_HEADER token: "
             f"id={instance.id}, user={instance.user.username}, "
             f"name={instance.name}, header_name={instance.header_name}, "
             f"base_url={instance.base_url}"
         )
-        # Log full stack trace to see who is deleting it
-        logger.error(f"[SERVICE_TOKEN] DELETE Stack trace:\n{''.join(traceback.format_stack())}")
     else:
-        logger.warning(
+        logger.debug(
             f"[SERVICE_TOKEN] DELETING: "
             f"id={instance.id}, user={instance.user.username}, "
             f"type={instance.service_type}, base_url={instance.base_url}"

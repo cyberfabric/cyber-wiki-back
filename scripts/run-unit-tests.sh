@@ -27,6 +27,9 @@ exit_code=$?
 if [ $exit_code -eq 0 ]; then
     echo ""
     echo "✅ All tests passed!"
+    echo ""
+    echo "� To run with coverage, use:"
+    echo "   ./scripts/pre-commit-tests.sh"
 else
     echo ""
     echo "❌ Some tests failed!"

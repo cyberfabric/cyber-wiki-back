@@ -52,6 +52,5 @@ Thumbs.db
 
 # Coverage
 .coverage
-.coverage_baseline
 htmlcov/
 .pytest_cache/

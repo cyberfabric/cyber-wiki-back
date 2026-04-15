@@ -33,7 +33,11 @@ if [ -d "venv/bin" ]; then
     source venv/bin/activate
 fi
 
-# Coverage file to track previous coverage
+# Coverage baseline tracking
+# The .coverage_baseline file stores the team's baseline coverage percentage
+# It IS committed to git so all developers share the same baseline
+# This prevents anyone from accidentally decreasing coverage
+# The baseline is updated only when coverage increases or stays the same
 COVERAGE_FILE=".coverage_baseline"
 MIN_COVERAGE=20
 
