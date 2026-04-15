@@ -13,8 +13,8 @@ class GitHubProvider(BaseGitProvider):
     Documentation: https://docs.github.com/en/rest
     """
     
-    def __init__(self, base_url: str = 'https://api.github.com', token: str = '', username: Optional[str] = None):
-        super().__init__(base_url, token, username)
+    def __init__(self, base_url: str = 'https://api.github.com', token: str = '', username: Optional[str] = None, user=None):
+        super().__init__(base_url, token, username, user)
         self.headers = {
             'Authorization': f'Bearer {token}',
             'Accept': 'application/vnd.github.v3+json',

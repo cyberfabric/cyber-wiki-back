@@ -58,10 +58,33 @@ Test Strategy:
 
 ---
 
+## Helper Functions
+
+**Golden Rule**: Common helper functions MUST be in `test_helpers.py`, not in individual test files.
+
+**Available Helpers**:
+- `create_mock_response(status_code, json_data, text)` - Create mock HTTP responses
+- `create_mock_user(username, **kwargs)` - Create mock user objects without database
+- `create_test_user(username, **kwargs)` - Create real user in database (requires `@pytest.mark.django_db`)
+- `create_test_space(owner, slug, **kwargs)` - Create test space in database
+- `assert_mock_called_with_params(mock_obj, **params)` - Assert mock was called with specific params
+
+**When to Extract to test_helpers.py**:
+1. Function is used in 2+ test files → Extract immediately
+2. Function creates mock objects (HTTP responses, users, etc.) → Extract
+3. Function has complex setup logic → Extract for reusability
+4. Function is a common assertion pattern → Extract
+
+**❌ DON'T**:
+- Create inline mock responses with `Mock()` - use `create_mock_response()`
+- Create inline mock users with `Mock()` - use `create_mock_user()`
+- Duplicate helper functions across test files
+- Add test-specific logic to helpers (keep them generic)
+
 ## Best Practices
 
 1. **Use shared fixtures** from `conftest.py` (user, space, admin_user, another_user, request_factory)
-2. **Use shared helpers** from `test_helpers.py` - ALWAYS use `create_mock_response()` instead of `Mock()`
+2. **Use shared helpers** from `test_helpers.py` - ALWAYS use helpers instead of creating `Mock()` directly
 3. **Descriptive test names** - `test_nested_paths_are_collapsed_to_top_level` not `test_paths`
 4. **Mock external dependencies** - Use `unittest.mock.patch` for API calls, external services
 5. **Keep tests fast** - Pure: <1s, Model: <2s, Business logic: <5s

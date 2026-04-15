@@ -1,3 +1,4 @@
+
 """
 Shared helper functions for unit tests.
 
@@ -98,6 +99,40 @@ def create_test_space(owner, slug: str = 'test-space', **kwargs):
         owner=owner,
         **defaults
     )
+
+
+def create_mock_user(username: str = 'testuser', **kwargs):
+    """
+    Create a mock user object for testing without database.
+    
+    Args:
+        username: Username for the mock user
+        **kwargs: Additional attributes to set on the mock user
+    
+    Returns:
+        Mock: A mock user object with common user attributes
+    
+    Example:
+        >>> mock_user = create_mock_user('john', email='john@test.com')
+        >>> mock_user.username
+        'john'
+        >>> mock_user.email
+        'john@test.com'
+    """
+    mock_user = Mock()
+    mock_user.username = username
+    mock_user.email = kwargs.get('email', f'{username}@test.com')
+    mock_user.id = kwargs.get('id', 1)
+    mock_user.is_active = kwargs.get('is_active', True)
+    mock_user.is_staff = kwargs.get('is_staff', False)
+    mock_user.is_superuser = kwargs.get('is_superuser', False)
+    
+    # Set any additional attributes
+    for key, value in kwargs.items():
+        if key not in ['email', 'id', 'is_active', 'is_staff', 'is_superuser']:
+            setattr(mock_user, key, value)
+    
+    return mock_user
 
 
 def assert_mock_called_with_params(mock_obj, **expected_params):

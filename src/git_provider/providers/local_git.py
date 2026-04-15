@@ -20,7 +20,7 @@ class LocalGitProvider(BaseGitProvider):
     on the server's filesystem, without requiring remote API access.
     """
     
-    def __init__(self, base_path: str, token: str = '', username: Optional[str] = None):
+    def __init__(self, base_path: str, token: str = '', username: Optional[str] = None, user=None):
         """
         Initialize the local Git provider.
         
@@ -28,8 +28,9 @@ class LocalGitProvider(BaseGitProvider):
             base_path: Base directory path where Git repositories are located
             token: Not used for local repos (kept for interface compatibility)
             username: Not used for local repos (kept for interface compatibility)
+            user: Django user instance for caching (optional)
         """
-        super().__init__(base_url=base_path, token=token, username=username)
+        super().__init__(base_url=base_path, token=token, username=username, user=user)
         self.base_path = Path(base_path)
         
         if not self.base_path.exists():
