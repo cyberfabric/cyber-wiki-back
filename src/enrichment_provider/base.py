@@ -5,6 +5,14 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 
 
+class EnrichmentCategory:
+    """
+    Enrichment categories define how enrichments interact with content.
+    """
+    REFERENCE = 'reference'  # Points to a line without modifying it (comments)
+    DIFF = 'diff'  # Modifies content by adding/removing lines (PR diffs, commits, edits)
+
+
 class BaseEnrichmentProvider(ABC):
     """
     Abstract base class for enrichment providers.
@@ -33,5 +41,15 @@ class BaseEnrichmentProvider(ABC):
         
         Returns:
             Enrichment type string (e.g., 'comments', 'pr_diff', 'local_changes')
+        """
+        pass
+    
+    @abstractmethod
+    def get_enrichment_category(self) -> str:
+        """
+        Get the category of enrichment this provider handles.
+        
+        Returns:
+            Enrichment category (EnrichmentCategory.REFERENCE or EnrichmentCategory.DIFF)
         """
         pass

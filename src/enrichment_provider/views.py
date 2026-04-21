@@ -342,3 +342,17 @@ def get_enrichment_types(request):
     registry = get_registry()
     types = registry.get_enrichment_types()
     return Response({'types': types})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_enrichment_metadata(request):
+    """
+    Get metadata for all enrichment types including categories.
+    
+    Returns:
+        Dictionary mapping enrichment types to their metadata
+    """
+    registry = get_registry()
+    metadata = registry.get_enrichment_metadata()
+    return Response(metadata)

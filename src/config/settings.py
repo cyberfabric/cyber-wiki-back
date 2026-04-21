@@ -182,6 +182,18 @@ OIDC_CLIENT_SECRET = os.environ.get('OIDC_CLIENT_SECRET', '')
 # Git Sync Settings
 SYNC_INTERVAL_MINUTES = int(os.environ.get('SYNC_INTERVAL_MINUTES', '5'))
 
+# Git Edit Workflow Settings (for worktree-based editing)
+DOCLAB_GIT_SSH_KEY = os.environ.get('DOCLAB_GIT_SSH_KEY', os.path.expanduser('~/.ssh/id_ed25519'))
+DOCLAB_GIT_CACHE_DIR = os.environ.get('DOCLAB_GIT_CACHE_DIR', str(BASE_DIR / 'data' / 'git-cache'))
+DOCLAB_GIT_WORKTREE_DIR = os.environ.get('DOCLAB_GIT_WORKTREE_DIR', '/tmp/doclab-worktrees')
+DOCLAB_GIT_CLONE_TIMEOUT = int(os.environ.get('DOCLAB_GIT_CLONE_TIMEOUT', '300'))
+DOCLAB_GIT_PUSH_TIMEOUT = int(os.environ.get('DOCLAB_GIT_PUSH_TIMEOUT', '60'))
+
+# Service account for Bitbucket API operations (PR creation, etc.)
+DOCLAB_SERVICE_BITBUCKET_URL = os.environ.get('DOCLAB_SERVICE_BITBUCKET_URL', '')
+DOCLAB_SERVICE_BITBUCKET_USERNAME = os.environ.get('DOCLAB_SERVICE_BITBUCKET_USERNAME', '')
+DOCLAB_SERVICE_BITBUCKET_TOKEN = os.environ.get('DOCLAB_SERVICE_BITBUCKET_TOKEN', '')
+
 # Create data directory if it doesn't exist
 (BASE_DIR / 'data').mkdir(exist_ok=True)
 

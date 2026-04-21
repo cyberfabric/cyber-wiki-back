@@ -2,7 +2,7 @@
 Comment enrichment provider.
 """
 from typing import List, Dict, Any
-from .base import BaseEnrichmentProvider
+from .base import BaseEnrichmentProvider, EnrichmentCategory
 from wiki.models import FileComment
 
 
@@ -59,3 +59,6 @@ class CommentEnrichmentProvider(BaseEnrichmentProvider):
     
     def get_enrichment_type(self) -> str:
         return 'comments'
+    
+    def get_enrichment_category(self) -> str:
+        return EnrichmentCategory.REFERENCE

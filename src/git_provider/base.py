@@ -48,6 +48,12 @@ class BaseGitProvider(ABC):
             'requires_authentication': True,
             'supports_webhooks': False,
             'supports_projects': False,
+            # Edit workflow capabilities
+            'list_branches': True,
+            'create_branch': True,
+            'delete_branch': True,
+            'create_pull_request': True,
+            'get_pull_request_status': True,
         }
     
     @property
@@ -208,3 +214,112 @@ class BaseGitProvider(ABC):
         """
         # Default implementation - can be overridden
         return repo_data.get('id', '')
+    
+    # Edit workflow methods (optional - not all providers support these)
+    
+    def list_branches(
+        self,
+        project_key: str,
+        repo_slug: str,
+        filter_text: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        List branches in a repository.
+        
+        Args:
+            project_key: Project key
+            repo_slug: Repository slug
+            filter_text: Optional filter for branch names
+            
+        Returns:
+            List of branch info dicts
+        """
+        raise NotImplementedError("list_branches not implemented for this provider")
+    
+    def create_branch(
+        self,
+        project_key: str,
+        repo_slug: str,
+        branch_name: str,
+        start_point: str = 'master',
+    ) -> Dict[str, Any]:
+        """
+        Create a new branch.
+        
+        Args:
+            project_key: Project key
+            repo_slug: Repository slug
+            branch_name: Name for the new branch
+            start_point: Branch or commit to branch from
+            
+        Returns:
+            Branch info dict
+        """
+        raise NotImplementedError("create_branch not implemented for this provider")
+    
+    def delete_branch(
+        self,
+        project_key: str,
+        repo_slug: str,
+        branch_name: str,
+    ) -> bool:
+        """
+        Delete a branch.
+        
+        Args:
+            project_key: Project key
+            repo_slug: Repository slug
+            branch_name: Branch to delete
+            
+        Returns:
+            True if deleted successfully
+        """
+        raise NotImplementedError("delete_branch not implemented for this provider")
+    
+    def create_pull_request(
+        self,
+        from_project: str,
+        from_repo: str,
+        from_branch: str,
+        to_project: str,
+        to_repo: str,
+        to_branch: str,
+        title: str,
+        description: str = '',
+    ) -> Dict[str, Any]:
+        """
+        Create a pull request.
+        
+        Args:
+            from_project: Source project key
+            from_repo: Source repository slug
+            from_branch: Source branch
+            to_project: Target project key
+            to_repo: Target repository slug
+            to_branch: Target branch
+            title: PR title
+            description: PR description
+            
+        Returns:
+            PR info dict with 'id', 'url', etc.
+        """
+        raise NotImplementedError("create_pull_request not implemented for this provider")
+    
+    def get_pull_request_status(
+        self,
+        project_key: str,
+        repo_slug: str,
+        pr_id: int,
+    ) -> str:
+        """
+        Get the status of a pull request.
+        
+        Args:
+            project_key: Project key
+            repo_slug: Repository slug
+            pr_id: Pull request ID
+            
+        Returns:
+            Status string (e.g., 'OPEN', 'MERGED', 'DECLINED')
+        """
+        raise NotImplementedError("get_pull_request_status not implemented for this provider")

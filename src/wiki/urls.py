@@ -9,6 +9,7 @@ from .views_user_changes import UserChangeViewSet
 from .views_tags import TagViewSet, DocumentTagViewSet
 from .views_links import DocumentLinkViewSet
 from .views_file_mapping import FileMappingViewSet
+from .views_draft_changes import DraftChangeViewSet
 
 router = DefaultRouter()
 
@@ -22,6 +23,9 @@ router.register(r'changes', UserChangeViewSet, basename='change')
 router.register(r'tags', TagViewSet, basename='tag')
 router.register(r'document-tags', DocumentTagViewSet, basename='document-tag')
 router.register(r'links', DocumentLinkViewSet, basename='link')
+
+# Draft changes (new simplified edit workflow)
+router.register(r'draft-changes', DraftChangeViewSet, basename='draft-change')
 
 # Nested routes for file mappings under spaces
 file_mapping_router = DefaultRouter()

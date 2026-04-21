@@ -64,15 +64,27 @@ class BitbucketServerProvider(BaseGitProvider):
         """Return the provider type identifier."""
         return 'bitbucket_server'
     
-    def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
-        """Make HTTP request to Bitbucket Server API with caching."""
+    def _request(self, method: str, endpoint: str, api_type: str = 'api', **kwargs) -> requests.Response:
+        """Make HTTP request to Bitbucket Server API with caching.
+        
+        Args:
+            method: HTTP method
+            endpoint: API endpoint path
+            api_type: API type - 'api' for /rest/api/1.0, 'branch-utils' for /rest/branch-utils/1.0
+            **kwargs: Additional arguments for requests
+        """
         from users.cache import get_cache
         from django.contrib.auth.models import User
         import logging
         import json
         
         logger = logging.getLogger(__name__)
-        url = f"{self.base_url}/rest/api/1.0{endpoint}"
+        
+        # Select API base path based on type
+        if api_type == 'branch-utils':
+            url = f"{self.base_url}/rest/branch-utils/1.0{endpoint}"
+        else:
+            url = f"{self.base_url}/rest/api/1.0{endpoint}"
         
         # Use HTTP Basic Auth for Bitbucket Server (username:token)
         if self.username:
@@ -584,3 +596,127 @@ class BitbucketServerProvider(BaseGitProvider):
         """Normalize repository ID to 'projectkey_reposlug' format."""
         project = repo_data.get('project', {})
         return f"{project.get('key', '')}_{repo_data.get('slug', '')}"
+    
+    # Edit workflow methods
+    
+    def list_branches(
+        self,
+        project_key: str,
+        repo_slug: str,
+        filter_text: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List branches in a repository."""
+        endpoint = f"/projects/{project_key}/repos/{repo_slug}/branches"
+        params = {'limit': 100}
+        if filter_text:
+            params['filterText'] = filter_text
+        
+        response = self._request('GET', endpoint, params=params)
+        branches = response.get('values', [])
+        
+        return [
+            {
+                'name': b.get('displayId', ''),
+                'id': b.get('id', ''),
+                'latest_commit': b.get('latestCommit', ''),
+                'is_default': b.get('isDefault', False),
+            }
+            for b in branches
+        ]
+    
+    def create_branch(
+        self,
+        project_key: str,
+        repo_slug: str,
+        branch_name: str,
+        start_point: str = 'master',
+    ) -> Dict[str, Any]:
+        """Create a new branch using branch-utils API."""
+        endpoint = f"/projects/{project_key}/repos/{repo_slug}/branches"
+        data = {
+            'name': branch_name,
+            'startPoint': start_point,
+        }
+        
+        response = self._request('POST', endpoint, json=data, api_type='branch-utils')
+        
+        return {
+            'name': response.get('displayId', branch_name),
+            'id': response.get('id', ''),
+            'latest_commit': response.get('latestCommit', ''),
+        }
+    
+    def delete_branch(
+        self,
+        project_key: str,
+        repo_slug: str,
+        branch_name: str,
+    ) -> bool:
+        """Delete a branch using branch-utils API."""
+        endpoint = f"/projects/{project_key}/repos/{repo_slug}/branches"
+        data = {
+            'name': f'refs/heads/{branch_name}',
+            'dryRun': False,
+        }
+        
+        self._request('DELETE', endpoint, json=data, api_type='branch-utils')
+        return True
+    
+    def create_pull_request(
+        self,
+        from_project: str,
+        from_repo: str,
+        from_branch: str,
+        to_project: str,
+        to_repo: str,
+        to_branch: str,
+        title: str,
+        description: str = '',
+    ) -> Dict[str, Any]:
+        """Create a pull request."""
+        endpoint = f"/projects/{to_project}/repos/{to_repo}/pull-requests"
+        
+        data = {
+            'title': title,
+            'description': description,
+            'fromRef': {
+                'id': f'refs/heads/{from_branch}',
+                'repository': {
+                    'project': {'key': from_project},
+                    'slug': from_repo,
+                }
+            },
+            'toRef': {
+                'id': f'refs/heads/{to_branch}',
+                'repository': {
+                    'project': {'key': to_project},
+                    'slug': to_repo,
+                }
+            }
+        }
+        
+        response = self._request('POST', endpoint, json=data)
+        
+        # Extract PR URL
+        links = response.get('links', {})
+        pr_url = links.get('self', [{}])[0].get('href', '')
+        if not pr_url:
+            pr_url = f"{self.base_url}/projects/{to_project}/repos/{to_repo}/pull-requests/{response.get('id')}"
+        
+        return {
+            'id': response.get('id'),
+            'url': pr_url,
+            'title': response.get('title'),
+            'state': response.get('state'),
+        }
+    
+    def get_pull_request_status(
+        self,
+        project_key: str,
+        repo_slug: str,
+        pr_id: int,
+    ) -> str:
+        """Get the status of a pull request."""
+        endpoint = f"/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_id}"
+        response = self._request('GET', endpoint)
+        return response.get('state', 'OPEN')

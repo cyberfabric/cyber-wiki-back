@@ -2,7 +2,7 @@
 Local changes enrichment provider.
 """
 from typing import List, Dict, Any
-from .base import BaseEnrichmentProvider
+from .base import BaseEnrichmentProvider, EnrichmentCategory
 from source_provider.base import SourceAddress
 from wiki.models import UserChange
 
@@ -54,3 +54,6 @@ class LocalChangesEnrichmentProvider(BaseEnrichmentProvider):
     
     def get_enrichment_type(self) -> str:
         return 'local_changes'
+    
+    def get_enrichment_category(self) -> str:
+        return EnrichmentCategory.REFERENCE

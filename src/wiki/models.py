@@ -95,6 +95,32 @@ class Space(models.Model):
         help_text='Default Git branch (auto-detected if empty)'
     )
     
+    # Edit Fork Configuration (for edit workflow with git worktrees)
+    edit_fork_project_key = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text='Project key for edit fork (e.g., ~doclab-service)'
+    )
+    edit_fork_repo_slug = models.CharField(
+        max_length=200,
+        null=True,
+        blank=True,
+        help_text='Repository slug for edit fork'
+    )
+    edit_fork_ssh_url = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='SSH clone URL for edit fork (e.g., ssh://git@git.example.com/~service/repo.git)'
+    )
+    edit_fork_local_path = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='Local path to pre-cloned edit fork repo (for development, overrides ssh_url)'
+    )
+    
     # File Mapping Configuration
     filters = models.JSONField(
         default=list,
@@ -140,6 +166,19 @@ class Space(models.Model):
 
     def __str__(self):
         return self.name
+    
+    @property
+    def edit_enabled(self) -> bool:
+        """Check if editing is configured for this space."""
+        # Local path takes precedence (for development)
+        if self.edit_fork_local_path:
+            return True
+        # Otherwise need full SSH config
+        return bool(
+            self.edit_fork_project_key and
+            self.edit_fork_repo_slug and
+            self.edit_fork_ssh_url
+        )
 
 
 class Document(models.Model):
@@ -358,6 +397,523 @@ class UserChange(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.file_path} ({self.status})"
+
+
+class EditSession(models.Model):
+    """
+    Tracks a user's editing session for a space.
+    Multiple file changes can be grouped into one session → one PR.
+    
+    This implements the edit workflow with git worktrees:
+    - Users edit files in DocLab
+    - Changes are stored in pending_changes JSON
+    - On submit, DocLab creates a branch on the edit fork, commits, and creates PR
+    - All commits use --author to preserve user attribution
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Ownership
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='edit_sessions')
+    space = models.ForeignKey(Space, on_delete=models.CASCADE, related_name='edit_sessions')
+    
+    # Session state
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft - Changes pending'
+        SUBMITTING = 'submitting', 'Submitting - PR being created'
+        SUBMITTED = 'submitted', 'Submitted - PR created'
+        MERGED = 'merged', 'Merged'
+        CLOSED = 'closed', 'Closed without merge'
+        ABANDONED = 'abandoned', 'Abandoned by user'
+        ERROR = 'error', 'Error during submission'
+    
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT
+    )
+    error_message = models.TextField(
+        blank=True,
+        help_text='Error message if status is ERROR'
+    )
+    
+    # Pending changes (before PR creation)
+    pending_changes = models.JSONField(
+        default=list,
+        help_text='''
+        List of pending file changes:
+        [
+            {
+                "file_path": "docs/README.md",
+                "original_content": "...",
+                "modified_content": "...",
+                "change_type": "modify",
+                "description": "Fixed typo"
+            }
+        ]
+        '''
+    )
+    
+    # Git branch info (after changes are pushed)
+    branch_name = models.CharField(
+        max_length=200,
+        null=True,
+        blank=True,
+        help_text='Branch name on edit fork (e.g., doclab/maxim-cherey/edit-abc123)'
+    )
+    base_branch = models.CharField(
+        max_length=100,
+        default='master',
+        help_text='Base branch to create PR against'
+    )
+    commit_sha = models.CharField(
+        max_length=40,
+        null=True,
+        blank=True,
+        help_text='SHA of the commit on the edit fork'
+    )
+    
+    # PR info (after PR creation)
+    pr_id = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text='Pull request ID in Bitbucket'
+    )
+    pr_url = models.URLField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='URL to the pull request'
+    )
+    
+    # Metadata
+    title = models.CharField(
+        max_length=200,
+        help_text='Session title / PR title'
+    )
+    description = models.TextField(
+        blank=True,
+        help_text='Session description / PR description'
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    submitted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='When the PR was created'
+    )
+    
+    class Meta:
+        db_table = 'wiki_edit_session'
+        verbose_name = 'Edit Session'
+        verbose_name_plural = 'Edit Sessions'
+        ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['space', 'status']),
+            models.Index(fields=['user', 'space', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.space.name} - {self.title} ({self.status})"
+    
+    def get_branch_name(self) -> str:
+        """Generate unique branch name for this session."""
+        if self.branch_name:
+            return self.branch_name
+        short_id = str(self.id)[:8]
+        safe_username = self.user.username.lower().replace('.', '-')
+        return f"doclab/{safe_username}/edit-{short_id}"
+    
+    def add_change(self, file_path: str, original_content: str, modified_content: str,
+                   change_type: str = 'modify', description: str = ''):
+        """Add or update a file change in this session."""
+        changes = list(self.pending_changes)
+        
+        # Check if file already has a change
+        for i, change in enumerate(changes):
+            if change['file_path'] == file_path:
+                # Update existing change
+                changes[i] = {
+                    'file_path': file_path,
+                    'original_content': original_content,
+                    'modified_content': modified_content,
+                    'change_type': change_type,
+                    'description': description,
+                }
+                self.pending_changes = changes
+                return
+        
+        # Add new change
+        changes.append({
+            'file_path': file_path,
+            'original_content': original_content,
+            'modified_content': modified_content,
+            'change_type': change_type,
+            'description': description,
+        })
+        self.pending_changes = changes
+    
+    def remove_change(self, file_path: str):
+        """Remove a file change from this session."""
+        self.pending_changes = [
+            c for c in self.pending_changes if c['file_path'] != file_path
+        ]
+    
+    def get_change(self, file_path: str):
+        """Get a specific file change."""
+        for change in self.pending_changes:
+            if change['file_path'] == file_path:
+                return change
+        return None
+    
+    @property
+    def change_count(self) -> int:
+        """Number of pending changes (both JSON and model-based)."""
+        return len(self.pending_changes) + self.changes.count()
+
+
+class EditSessionChange(models.Model):
+    """
+    Individual file change within an edit session.
+    
+    Lifecycle:
+    - draft: User saved changes, not yet committed to fork
+    - staged: Changes committed to fork branch (has commit_sha)
+    - submitted: Part of a PR (session has pr_id)
+    
+    This replaces the JSON-based pending_changes for new changes.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    session = models.ForeignKey(
+        EditSession,
+        on_delete=models.CASCADE,
+        related_name='changes'
+    )
+    
+    # File info
+    file_path = models.CharField(max_length=500, help_text='Path relative to repo root')
+    
+    class ChangeType(models.TextChoices):
+        MODIFY = 'modify', 'Modify existing file'
+        CREATE = 'create', 'Create new file'
+        DELETE = 'delete', 'Delete file'
+    
+    change_type = models.CharField(
+        max_length=20,
+        choices=ChangeType.choices,
+        default=ChangeType.MODIFY
+    )
+    
+    # Content
+    original_content = models.TextField(
+        blank=True,
+        help_text='Original file content (empty for create)'
+    )
+    modified_content = models.TextField(
+        blank=True,
+        help_text='Modified file content (empty for delete)'
+    )
+    description = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text='Description of this change'
+    )
+    
+    # Status tracking
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft - Not yet committed'
+        STAGED = 'staged', 'Staged - Committed to fork'
+        SUBMITTED = 'submitted', 'Submitted - In PR'
+        MERGED = 'merged', 'Merged'
+        DISCARDED = 'discarded', 'Discarded'
+    
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT
+    )
+    
+    # Git info (populated when staged)
+    commit_sha = models.CharField(
+        max_length=40,
+        null=True,
+        blank=True,
+        help_text='SHA of the commit containing this change'
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    staged_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='When the change was committed to fork'
+    )
+    
+    class Meta:
+        db_table = 'wiki_edit_session_change'
+        verbose_name = 'Edit Session Change'
+        verbose_name_plural = 'Edit Session Changes'
+        ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['session', 'status']),
+            models.Index(fields=['file_path']),
+            models.Index(fields=['status']),
+        ]
+        unique_together = [['session', 'file_path']]
+    
+    def __str__(self):
+        return f"{self.file_path} ({self.status})"
+    
+    def generate_diff(self) -> str:
+        """Generate unified diff for this change."""
+        import difflib
+        
+        if self.change_type == 'delete':
+            original_lines = self.original_content.split('\n')
+            return '\n'.join(difflib.unified_diff(
+                original_lines, [],
+                fromfile=f'a/{self.file_path}',
+                tofile=f'b/{self.file_path}',
+                lineterm=''
+            ))
+        elif self.change_type == 'create':
+            modified_lines = self.modified_content.split('\n')
+            return '\n'.join(difflib.unified_diff(
+                [], modified_lines,
+                fromfile=f'a/{self.file_path}',
+                tofile=f'b/{self.file_path}',
+                lineterm=''
+            ))
+        else:
+            original_lines = self.original_content.split('\n')
+            modified_lines = self.modified_content.split('\n')
+            return '\n'.join(difflib.unified_diff(
+                original_lines, modified_lines,
+                fromfile=f'a/{self.file_path}',
+                tofile=f'b/{self.file_path}',
+                lineterm=''
+            ))
+
+
+class UserDraftChange(models.Model):
+    """
+    Draft change - saved in DocLab but not yet committed to git.
+    
+    This is shown as 'edit' enrichment.
+    Actions: Stage (commit to fork), Discard
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='draft_changes'
+    )
+    space = models.ForeignKey(
+        Space,
+        on_delete=models.CASCADE,
+        related_name='draft_changes'
+    )
+    
+    # File info
+    file_path = models.CharField(max_length=500, help_text='Path relative to repo root')
+    
+    class ChangeType(models.TextChoices):
+        MODIFY = 'modify', 'Modify existing file'
+        CREATE = 'create', 'Create new file'
+        DELETE = 'delete', 'Delete file'
+    
+    change_type = models.CharField(
+        max_length=20,
+        choices=ChangeType.choices,
+        default=ChangeType.MODIFY
+    )
+    
+    # Content
+    original_content = models.TextField(
+        blank=True,
+        help_text='Original file content (empty for create)'
+    )
+    modified_content = models.TextField(
+        blank=True,
+        help_text='Modified file content (empty for delete)'
+    )
+    description = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text='Description of this change'
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'wiki_user_draft_change'
+        verbose_name = 'User Draft Change'
+        verbose_name_plural = 'User Draft Changes'
+        ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['user', 'space']),
+            models.Index(fields=['file_path']),
+        ]
+        unique_together = [['user', 'space', 'file_path']]
+    
+    def __str__(self):
+        return f"{self.user.username}: {self.file_path}"
+    
+    def generate_diff_hunks(self):
+        """Generate diff hunks for this change."""
+        import difflib
+        import re
+        
+        original_lines = self.original_content.split('\n')
+        modified_lines = self.modified_content.split('\n')
+        
+        diff = list(difflib.unified_diff(
+            original_lines,
+            modified_lines,
+            lineterm='',
+            n=3
+        ))
+        
+        if len(diff) < 3:
+            return []
+        
+        hunks = []
+        current_hunk = None
+        
+        for line in diff[2:]:
+            if line.startswith('@@'):
+                if current_hunk:
+                    hunks.append(current_hunk)
+                
+                match = re.match(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', line)
+                if match:
+                    current_hunk = {
+                        'old_start': int(match.group(1)),
+                        'old_count': int(match.group(2) or 1),
+                        'new_start': int(match.group(3)),
+                        'new_count': int(match.group(4) or 1),
+                        'lines': []
+                    }
+            elif current_hunk is not None:
+                current_hunk['lines'].append(line)
+        
+        if current_hunk:
+            hunks.append(current_hunk)
+        
+        return hunks
+
+
+class UserBranch(models.Model):
+    """
+    Tracks user's edit branch in the fork.
+    
+    Staged changes are commits in this branch.
+    Shown as 'edit_staged' enrichment (changes read from git).
+    Actions: Create PR, Unstage
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='edit_branches'
+    )
+    space = models.ForeignKey(
+        Space,
+        on_delete=models.CASCADE,
+        related_name='edit_branches'
+    )
+    
+    # Branch info
+    branch_name = models.CharField(
+        max_length=200,
+        help_text='Branch name on edit fork'
+    )
+    base_branch = models.CharField(
+        max_length=100,
+        default='master',
+        help_text='Base branch to create PR against'
+    )
+    last_commit_sha = models.CharField(
+        max_length=40,
+        null=True,
+        blank=True,
+        help_text='SHA of the last commit on this branch'
+    )
+    
+    # PR info (set when PR is created)
+    pr_id = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text='Pull request ID'
+    )
+    pr_url = models.URLField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='URL to the pull request'
+    )
+    
+    # Status
+    class Status(models.TextChoices):
+        ACTIVE = 'active', 'Active - Has staged changes'
+        PR_OPEN = 'pr_open', 'PR Open'
+        PR_MERGED = 'pr_merged', 'PR Merged'
+        PR_CLOSED = 'pr_closed', 'PR Closed'
+        ABANDONED = 'abandoned', 'Abandoned'
+    
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.ACTIVE
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'wiki_user_branch'
+        verbose_name = 'User Branch'
+        verbose_name_plural = 'User Branches'
+        ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['user', 'space']),
+            models.Index(fields=['status']),
+        ]
+        unique_together = [['user', 'space', 'branch_name']]
+    
+    def __str__(self):
+        return f"{self.user.username}: {self.branch_name}"
+    
+    @classmethod
+    def get_or_create_for_user(cls, user, space):
+        """Get or create the active branch for a user in a space."""
+        branch, created = cls.objects.get_or_create(
+            user=user,
+            space=space,
+            status=cls.Status.ACTIVE,
+            defaults={
+                'branch_name': cls.generate_branch_name(user, space),
+                'base_branch': space.git_default_branch or 'master',
+            }
+        )
+        return branch, created
+    
+    @staticmethod
+    def generate_branch_name(user, space):
+        """Generate unique branch name."""
+        import uuid as uuid_module
+        short_id = str(uuid_module.uuid4())[:8]
+        safe_username = user.username.lower().replace('.', '-')
+        return f"doclab/{safe_username}/edit-{short_id}"
 
 
 class SpacePermission(models.Model):

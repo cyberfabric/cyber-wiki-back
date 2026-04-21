@@ -5,7 +5,7 @@ from rest_framework import serializers
 from .models import (
     Space, Document, FileComment, UserChange, Tag, DocumentTag, DocumentLink, GitSyncConfig,
     SpacePermission, SpaceConfiguration, SpaceShortcut, UserSpacePreference, SpaceAttribute,
-    FileMapping
+    FileMapping, EditSession
 )
 
 
@@ -14,6 +14,8 @@ class SpaceDetailSerializer(serializers.ModelSerializer):
     owner_username = serializers.CharField(source='owner.username', read_only=True)
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
     git_repository_url = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    
+    edit_enabled = serializers.BooleanField(read_only=True)
     
     class Meta:
         model = Space
@@ -24,12 +26,15 @@ class SpaceDetailSerializer(serializers.ModelSerializer):
             'git_provider', 'git_base_url', 'git_project_key',
             'git_repository_id', 'git_repository_name', 'git_default_branch',
             'git_repository_url',
+            # Edit fork configuration
+            'edit_fork_project_key', 'edit_fork_repo_slug', 'edit_fork_ssh_url',
+            'edit_fork_local_path', 'edit_enabled',
             'default_display_name_source', 'filters',
             'page_count',
             'created_by', 'created_by_username',
             'created_at', 'updated_at', 'last_synced_at'
         ]
-        read_only_fields = ['id', 'created_by', 'page_count', 'created_at', 'updated_at', 'last_synced_at']
+        read_only_fields = ['id', 'created_by', 'page_count', 'created_at', 'updated_at', 'last_synced_at', 'edit_enabled']
         extra_kwargs = {
             'git_default_branch': {'allow_blank': True, 'required': False},
         }
@@ -492,3 +497,85 @@ class FileMappingCreateSerializer(serializers.ModelSerializer):
         except Exception as e:
             # Log error but don't fail the save
             logger.error(f'[EXTRACT] Failed to extract name for {mapping.file_path}: {str(e)}', exc_info=True)
+
+
+class FileChangeSerializer(serializers.Serializer):
+    """Serializer for individual file changes within an EditSession."""
+    file_path = serializers.CharField(max_length=1000)
+    original_content = serializers.CharField(allow_blank=True, required=False)
+    modified_content = serializers.CharField(allow_blank=True)
+    change_type = serializers.ChoiceField(
+        choices=['modify', 'create', 'delete'],
+        default='modify'
+    )
+    description = serializers.CharField(allow_blank=True, required=False, default='')
+
+
+class EditSessionSerializer(serializers.ModelSerializer):
+    """Serializer for EditSession model."""
+    user_username = serializers.CharField(source='user.username', read_only=True)
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    user_full_name = serializers.SerializerMethodField()
+    space_name = serializers.CharField(source='space.name', read_only=True)
+    space_slug = serializers.CharField(source='space.slug', read_only=True)
+    change_count = serializers.IntegerField(read_only=True)
+    
+    class Meta:
+        model = EditSession
+        fields = [
+            'id', 'user', 'user_username', 'user_email', 'user_full_name',
+            'space', 'space_name', 'space_slug',
+            'status', 'error_message',
+            'pending_changes', 'change_count',
+            'branch_name', 'base_branch', 'commit_sha',
+            'pr_id', 'pr_url',
+            'title', 'description',
+            'created_at', 'updated_at', 'submitted_at',
+        ]
+        read_only_fields = [
+            'id', 'user', 'status', 'error_message',
+            'branch_name', 'commit_sha',
+            'pr_id', 'pr_url',
+            'created_at', 'updated_at', 'submitted_at',
+        ]
+    
+    def get_user_full_name(self, obj):
+        return obj.user.get_full_name() or obj.user.username
+
+
+class EditSessionCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating a new EditSession."""
+    
+    class Meta:
+        model = EditSession
+        fields = ['title', 'description', 'base_branch']
+        extra_kwargs = {
+            'description': {'required': False, 'allow_blank': True},
+            'base_branch': {'required': False},
+        }
+    
+    def create(self, validated_data):
+        # Set defaults
+        if 'base_branch' not in validated_data or not validated_data['base_branch']:
+            space = self.context.get('space')
+            if space and space.git_default_branch:
+                validated_data['base_branch'] = space.git_default_branch
+            else:
+                validated_data['base_branch'] = 'master'
+        
+        return super().create(validated_data)
+
+
+class EditSessionSubmitSerializer(serializers.Serializer):
+    """Serializer for submitting an EditSession (creating PR)."""
+    title = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    description = serializers.CharField(required=False, allow_blank=True)
+
+
+class EditSessionDiffSerializer(serializers.Serializer):
+    """Serializer for diff preview response."""
+    file_path = serializers.CharField()
+    change_type = serializers.CharField()
+    diff = serializers.CharField()
+    additions = serializers.IntegerField()
+    deletions = serializers.IntegerField()

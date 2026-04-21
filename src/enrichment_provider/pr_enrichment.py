@@ -4,7 +4,7 @@ Pull request enrichment provider.
 import logging
 import time
 from typing import List, Dict, Any
-from .base import BaseEnrichmentProvider
+from .base import BaseEnrichmentProvider, EnrichmentCategory
 from source_provider.base import SourceAddress
 from git_provider.factory import GitProviderFactory
 from service_tokens.models import ServiceToken
@@ -208,3 +208,6 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
     
     def get_enrichment_type(self) -> str:
         return 'pr_diff'
+    
+    def get_enrichment_category(self) -> str:
+        return EnrichmentCategory.DIFF

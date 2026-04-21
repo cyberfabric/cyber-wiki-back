@@ -7,6 +7,7 @@ from .comment_enrichment import CommentEnrichmentProvider
 from .local_changes_enrichment import LocalChangesEnrichmentProvider
 from .pr_enrichment import PREnrichmentProvider
 from .diff_enrichment import DiffEnrichmentProvider
+from .edit_session_enrichment import EditEnrichmentProvider, CommitEnrichmentProvider
 
 
 class EnrichmentRegistry:
@@ -25,6 +26,8 @@ class EnrichmentRegistry:
         self.register(LocalChangesEnrichmentProvider())
         self.register(PREnrichmentProvider())
         self.register(DiffEnrichmentProvider())
+        self.register(EditEnrichmentProvider())
+        self.register(CommitEnrichmentProvider())
     
     def register(self, provider: BaseEnrichmentProvider):
         """
@@ -112,6 +115,22 @@ class EnrichmentRegistry:
                 logger = logging.getLogger(__name__)
                 logger.error(f"Error getting {enrichment_type} enrichments: {e}", exc_info=True)
         return []
+    
+    def get_enrichment_metadata(self) -> Dict[str, Dict[str, str]]:
+        """
+        Get metadata for all enrichment types.
+        
+        Returns:
+            Dictionary mapping enrichment types to their metadata (category, etc.)
+        """
+        metadata = {}
+        for provider in self._providers:
+            enrichment_type = provider.get_enrichment_type()
+            metadata[enrichment_type] = {
+                'type': enrichment_type,
+                'category': provider.get_enrichment_category(),
+            }
+        return metadata
 
 
 # Global registry instance

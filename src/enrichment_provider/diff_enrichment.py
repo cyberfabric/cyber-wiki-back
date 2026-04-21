@@ -3,7 +3,7 @@ Diff enrichment provider for showing changes.
 """
 from typing import List, Dict, Any
 import difflib
-from .base import BaseEnrichmentProvider
+from .base import BaseEnrichmentProvider, EnrichmentCategory
 from wiki.models import UserChange
 
 
@@ -152,3 +152,6 @@ class DiffEnrichmentProvider(BaseEnrichmentProvider):
     
     def get_enrichment_type(self) -> str:
         return 'diff'
+    
+    def get_enrichment_category(self) -> str:
+        return EnrichmentCategory.DIFF
