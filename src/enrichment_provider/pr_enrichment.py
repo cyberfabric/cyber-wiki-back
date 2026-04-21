@@ -2,12 +2,16 @@
 Pull request enrichment provider.
 """
 import logging
+import re
 import time
+import traceback
 from typing import List, Dict, Any
 from .base import BaseEnrichmentProvider, EnrichmentCategory
 from source_provider.base import SourceAddress
 from git_provider.factory import GitProviderFactory
 from service_tokens.models import ServiceToken
+
+_HUNK_HEADER_RE = re.compile(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +82,14 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
                     if not diff_text:
                         logger.debug(f"[PR] No diff available for PR #{pr['number']}")
                         continue
-                    
-                    # Parse diff to extract hunks for this file
-                    # This will return empty list if file is not actually modified
-                    logger.debug(f"[PR] Parsing diff for file: {address.path}, diff length: {len(diff_text)} chars")
+
+                    # Fast pre-filter: skip full parse when the file path doesn't appear as a
+                    # diff marker in this PR at all. Handles both "a/path" and bare "path" formats.
+                    if (f'+++ b/{address.path}' not in diff_text and
+                            f'+++ {address.path}' not in diff_text):
+                        logger.debug(f"[PR] Skipping PR #{pr['number']} (file not in diff)")
+                        continue
+
                     hunks = self._parse_diff_hunks(diff_text, address.path)
                     
                     pr_file_duration = time.time() - pr_file_start
@@ -101,8 +109,6 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
                         })
                 
                 except Exception as e:
-                    # If we can't get the diff for a PR, skip it
-                    import traceback
                     logger.warning(f"Failed to get files for PR {pr['number']}: {e}")
                     logger.debug(f"Traceback: {traceback.format_exc()}")
                     continue
@@ -134,9 +140,7 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
             }
         ]
         """
-        logger.debug(f"[PR] Parsing diff for file: {file_path}")
-        logger.debug(f"[PR] Diff text length: {len(diff_text)} chars")
-        
+        logger.debug(f"[PR] Parsing diff for file: {file_path}, diff length: {len(diff_text)} chars")
         hunks = []
         in_file = False
         current_hunk = None
@@ -179,9 +183,7 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
                 if current_hunk:
                     hunks.append(current_hunk)
                 
-                # Extract line numbers from hunk header
-                import re
-                match = re.match(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', line)
+                match = _HUNK_HEADER_RE.match(line)
                 if match:
                     old_start = int(match.group(1))
                     old_count = int(match.group(2)) if match.group(2) else 1
