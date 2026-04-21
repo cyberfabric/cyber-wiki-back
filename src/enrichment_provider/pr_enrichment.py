@@ -141,6 +141,7 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
         in_file = False
         current_hunk = None
         file_marker_count = 0
+        seen_files = []
         
         for line in diff_text.split('\n'):
             # Check if we're entering the section for our file
@@ -152,6 +153,10 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
                 marker_file = line[4:].strip()  # Remove "--- " or "+++ "
                 if marker_file.startswith('a/') or marker_file.startswith('b/'):
                     marker_file = marker_file[2:]  # Remove a/ or b/ prefix
+                
+                # Track all unique files we see
+                if marker_file and marker_file not in seen_files and marker_file != '/dev/null':
+                    seen_files.append(marker_file)
                 
                 # Match only if exact path match
                 # file_path from source_uri is the full path (e.g., "tools/standctl/.trufflehog3.yml" or "README.md")
@@ -203,6 +208,7 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
         logger.debug(f"[PR] Found {len(hunks)} hunks for file {file_path} (file_markers: {file_marker_count}, in_file: {in_file})")
         if len(hunks) == 0 and file_marker_count > 0:
             logger.warning(f"[PR] No hunks found but saw {file_marker_count} file markers. File path might not match. Looking for: {file_path}")
+            logger.warning(f"[PR] All files seen in diff: {seen_files}")
         
         return hunks
     
