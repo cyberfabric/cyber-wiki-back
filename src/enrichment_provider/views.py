@@ -1,5 +1,6 @@
 import logging
 import time
+import traceback
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -10,77 +11,60 @@ from wiki.models import Space
 logger = logging.getLogger(__name__)
 
 
+def _empty_file_enrichments():
+    return {'pr_diff': [], 'comments': [], 'diff': [], 'local_changes': [], 'edit': [], 'commit': []}
+
+
+def _ensure_file(file_enrichments, file_path):
+    if file_path not in file_enrichments:
+        file_enrichments[file_path] = _empty_file_enrichments()
+
+
 def _get_space_enrichments(request, space_slug, start_time):
     """
     Get all enrichments for a space.
-    Fetches all PRs once and maps them to files.
-    Returns: {file_path: {pr_diff: [...], comments: [...]}}
+    Returns: {file_path: {pr_diff: [...], comments: [...], edit: [...], local_changes: [...]}}
     """
     from git_provider.factory import GitProviderFactory
     from service_tokens.models import ServiceToken
-    
+    from wiki.models import FileComment, UserDraftChange, UserChange
+
     try:
-        # Get space
         space = Space.objects.get(slug=space_slug)
-        
-        # Build repository ID
         repo_id = f"{space.git_project_key}_{space.git_repository_id}"
-        
+        branch = space.git_default_branch or 'master'
+
         logger.info(f"[SpaceEnrichments] Space: {space.name}, Provider: {space.git_provider}, Repo: {repo_id}")
-        
-        # Get Git provider
+
         service_token = ServiceToken.objects.filter(
             user=request.user,
             service_type=space.git_provider
         ).first()
-        
+
         if not service_token:
             logger.warning(f"[SpaceEnrichments] No service token for {space.git_provider}")
             return Response({'error': 'No service token found'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         provider = GitProviderFactory.create_from_service_token(service_token)
-        
-        # Get all open PRs for this repository
-        logger.info(f"[SpaceEnrichments] Fetching PRs for space: {space.name}")
+
+        # ── PR diffs ──────────────────────────────────────────────────────────
         prs_start = time.time()
         prs_response = provider.list_pull_requests(
-            repo_id=repo_id,
-            state='open',
-            page=1,
-            per_page=1000
+            repo_id=repo_id, state='open', page=1, per_page=1000
         )
-        prs_duration = time.time() - prs_start
-        pr_count = len(prs_response.get('pull_requests', []))
-        logger.info(f"[SpaceEnrichments] Fetched {pr_count} PRs in {prs_duration:.3f}s")
-        
-        # Build file_path -> enrichments mapping
+        logger.info(f"[SpaceEnrichments] Fetched {len(prs_response.get('pull_requests', []))} PRs in {time.time() - prs_start:.3f}s")
+
         file_enrichments = {}
-        
-        # Process each PR
+
         for pr in prs_response.get('pull_requests', []):
             try:
-                # Fetch PR diff
-                diff_text = provider.get_pull_request_diff(
-                    repo_id=repo_id,
-                    pr_number=pr['number']
-                )
-                
+                diff_text = provider.get_pull_request_diff(repo_id=repo_id, pr_number=pr['number'])
                 if not diff_text:
                     continue
-                
-                # Parse diff to find all files touched by this PR
-                touched_files = _extract_files_from_diff(diff_text)
-                
-                # For each file, parse hunks and add enrichment
-                for file_path in touched_files:
+                for file_path in _extract_files_from_diff(diff_text):
                     hunks = _parse_diff_hunks_for_file(diff_text, file_path)
-                    
                     if hunks:
-                        # Initialize file enrichments if not exists
-                        if file_path not in file_enrichments:
-                            file_enrichments[file_path] = {'pr_diff': [], 'comments': [], 'diff': [], 'local_changes': []}
-                        
-                        # Add PR enrichment
+                        _ensure_file(file_enrichments, file_path)
                         file_enrichments[file_path]['pr_diff'].append({
                             'type': 'pr_diff',
                             'pr_number': pr['number'],
@@ -91,23 +75,98 @@ def _get_space_enrichments(request, space_slug, start_time):
                             'created_at': pr['created_at'],
                             'diff_hunks': hunks,
                         })
-            
             except Exception as e:
                 logger.warning(f"[SpaceEnrichments] Failed to process PR #{pr.get('number')}: {e}")
-                continue
-        
-        # TODO: Add comments enrichments (query all comments for space)
-        
+
+        # ── Comments ──────────────────────────────────────────────────────────
+        source_uri_prefix = f"git://{space.git_provider}/{repo_id}/{branch}/"
+        comments_qs = (
+            FileComment.objects
+            .filter(source_uri__startswith=source_uri_prefix, parent_comment=None)
+            .select_related('author')
+            .prefetch_related('replies')
+            .order_by('line_start', 'created_at')
+        )
+
+        def _serialize_comment(comment):
+            data = {
+                'type': 'comment',
+                'id': str(comment.id),
+                'source_uri': comment.source_uri,
+                'line_start': comment.line_start,
+                'line_end': comment.line_end,
+                'text': comment.text,
+                'author': comment.author.username,
+                'thread_id': str(comment.thread_id),
+                'parent_id': str(comment.parent_comment.id) if comment.parent_comment else None,
+                'is_resolved': comment.is_resolved,
+                'anchoring_status': comment.anchoring_status,
+                'created_at': comment.created_at.isoformat(),
+                'updated_at': comment.updated_at.isoformat(),
+                'replies': [_serialize_comment(r) for r in comment.replies.all()],
+            }
+            return data
+
+        for comment in comments_qs:
+            file_path = comment.source_uri[len(source_uri_prefix):]
+            _ensure_file(file_enrichments, file_path)
+            file_enrichments[file_path]['comments'].append(_serialize_comment(comment))
+
+        logger.info(f"[SpaceEnrichments] Loaded {comments_qs.count()} comment threads")
+
+        # ── Draft edits (UserDraftChange) ─────────────────────────────────────
+        draft_changes = UserDraftChange.objects.filter(
+            user=request.user, space=space
+        ).select_related('space')
+
+        for change in draft_changes:
+            _ensure_file(file_enrichments, change.file_path)
+            file_enrichments[change.file_path]['edit'].append({
+                'type': 'edit',
+                'id': str(change.id),
+                'space_id': str(change.space.id),
+                'space_slug': change.space.slug,
+                'file_path': change.file_path,
+                'change_type': change.change_type,
+                'description': change.description or '',
+                'user': request.user.username,
+                'user_full_name': request.user.get_full_name() or request.user.username,
+                'created_at': change.created_at.isoformat(),
+                'updated_at': change.updated_at.isoformat(),
+                'diff_hunks': change.generate_diff_hunks(),
+                'actions': ['commit', 'discard'],
+            })
+
+        logger.info(f"[SpaceEnrichments] Loaded {draft_changes.count()} draft edits")
+
+        # ── Local changes (UserChange) ─────────────────────────────────────────
+        local_changes = UserChange.objects.filter(
+            user=request.user, repository_full_name=repo_id, status='pending'
+        ).order_by('-created_at')
+
+        for change in local_changes:
+            _ensure_file(file_enrichments, change.file_path)
+            file_enrichments[change.file_path]['local_changes'].append({
+                'type': 'local_change',
+                'id': change.id,
+                'file_path': change.file_path,
+                'commit_message': change.commit_message,
+                'status': change.status,
+                'created_at': change.created_at.isoformat(),
+                'updated_at': change.updated_at.isoformat(),
+            })
+
+        logger.info(f"[SpaceEnrichments] Loaded {local_changes.count()} local changes")
+
         total_duration = time.time() - start_time
         logger.info(f"[SpaceEnrichments] Total time: {total_duration:.3f}s, files with enrichments: {len(file_enrichments)}")
-        
+
         return Response(file_enrichments)
-    
+
     except Space.DoesNotExist:
         return Response({'error': 'Space not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         logger.error(f"[SpaceEnrichments] Failed: {e}")
-        import traceback
         logger.error(traceback.format_exc())
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
