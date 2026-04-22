@@ -10,6 +10,7 @@ from .views_tags import TagViewSet, DocumentTagViewSet
 from .views_links import DocumentLinkViewSet
 from .views_file_mapping import FileMappingViewSet
 from .views_draft_changes import DraftChangeViewSet
+from .views_user_branch import UserBranchViewSet
 
 router = DefaultRouter()
 
@@ -26,6 +27,9 @@ router.register(r'links', DocumentLinkViewSet, basename='link')
 
 # Draft changes (new simplified edit workflow)
 router.register(r'draft-changes', DraftChangeViewSet, basename='draft-change')
+
+# User branch management (commit, PR, discard, unstage, rebase)
+router.register(r'user-branch', UserBranchViewSet, basename='user-branch')
 
 # Nested routes for file mappings under spaces
 file_mapping_router = DefaultRouter()

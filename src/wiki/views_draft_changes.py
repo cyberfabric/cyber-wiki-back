@@ -5,6 +5,7 @@ Simple CRUD for draft changes (user edits not yet committed to git).
 Actions: commit (create git commit from selected edits), discard
 """
 import logging
+import os
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -14,7 +15,7 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse
 
 from .models import Space, UserDraftChange, UserBranch
 from users.permissions import IsEditorOrAbove
-from git_provider.worktree_manager import GitWorktreeManager, GitError
+from git_provider.worktree_manager import GitWorktreeManager, GitError, RebaseConflictError
 
 logger = logging.getLogger(__name__)
 
@@ -277,16 +278,18 @@ class DraftChangeViewSet(viewsets.ViewSet):
                 user=request.user,
                 space=space
             )
-            
             logger.info(
                 f"[DraftChange] {'Created' if branch_created else 'Using'} branch "
                 f"{user_branch.branch_name} for {request.user.username}"
             )
-            
-            # 2. Initialize GitWorktreeManager
+
+            # 2. Create worktree (also fetches latest from remote)
             manager = GitWorktreeManager()
-            
-            # 3. Create worktree (use branch ID as session ID)
+            effective_repo_path = (
+                space.edit_fork_local_path
+                if space.edit_fork_local_path and os.path.exists(space.edit_fork_local_path)
+                else manager.get_bare_repo_path(str(space.id))
+            )
             worktree_path = manager.create_worktree_sync(
                 space_id=str(space.id),
                 session_id=str(user_branch.id),
@@ -295,55 +298,67 @@ class DraftChangeViewSet(viewsets.ViewSet):
                 ssh_url=space.edit_fork_ssh_url,
                 local_repo_path=space.edit_fork_local_path,
             )
-            
-            logger.info(f"[DraftChange] Created worktree at {worktree_path}")
-            
-            # 4. Apply changes to worktree
+            logger.info(f"[DraftChange] Worktree at {worktree_path}")
+
+            # 3. Rebase onto latest base to keep the branch current
+            try:
+                manager.rebase_onto_base_sync(worktree_path, user_branch.base_branch)
+            except RebaseConflictError as exc:
+                user_branch.conflict_files = exc.conflicting_files
+                user_branch.save(update_fields=['conflict_files'])
+                manager.cleanup_worktree_sync(str(space.id), str(user_branch.id), repo_path=effective_repo_path)
+                return Response(
+                    {
+                        'error': 'rebase_conflict',
+                        'message': 'Your branch conflicts with the latest base branch.',
+                        'conflict_files': exc.conflicting_files,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            # Clear any previous conflict state
+            if user_branch.conflict_files:
+                user_branch.conflict_files = []
+                user_branch.save(update_fields=['conflict_files'])
+
+            # 4. Apply draft changes
             changes_list = [
-                {
-                    'file_path': c.file_path,
-                    'change_type': c.change_type,
-                    'modified_content': c.modified_content,
-                }
+                {'file_path': c.file_path, 'change_type': c.change_type,
+                 'modified_content': c.modified_content}
                 for c in changes
             ]
             manager.apply_changes(worktree_path, changes_list)
-            
             logger.info(f"[DraftChange] Applied {len(changes_list)} changes")
-            
+
             # 5. Commit with user as author
             author_name = request.user.get_full_name() or request.user.username
             author_email = request.user.email or f"{request.user.username}@doclab.local"
-            
             commit_sha = manager.commit_changes_sync(
                 worktree_path=worktree_path,
                 message=commit_message,
                 author_name=author_name,
                 author_email=author_email,
             )
-            
             logger.info(f"[DraftChange] Created commit {commit_sha[:8]}")
-            
-            # 6. Push to fork - disabled for now, will implement later
-            # TODO: Re-enable push when git flow is finalized
-            logger.info(f"[DraftChange] Push skipped (not yet implemented)")
-            
-            # 7. Update UserBranch record
-            user_branch.last_commit_sha = commit_sha
-            user_branch.save()
-            
-            # 8. Delete draft changes (they're now in git)
+
+            # 6. Push to fork
+            manager.push_branch_sync(worktree_path, user_branch.branch_name)
+            logger.info(f"[DraftChange] Pushed branch {user_branch.branch_name}")
+
+            # 7. Update branch record and remove drafts
             deleted_count = changes.count()
+            user_branch.last_commit_sha = commit_sha
+            user_branch.status = UserBranch.Status.ACTIVE
+            user_branch.save(update_fields=['last_commit_sha', 'status', 'conflict_files'])
             changes.delete()
-            
+
+            # 8. Cleanup worktree
+            manager.cleanup_worktree_sync(str(space.id), str(user_branch.id), repo_path=effective_repo_path)
+
             logger.info(
                 f"[DraftChange] Committed {deleted_count} changes for "
-                f"{request.user.username} in space {space.slug}: {commit_sha[:8]}"
+                f"{request.user.username} in {space.slug}: {commit_sha[:8]}"
             )
-            
-            # 9. Cleanup worktree (optional - keep for potential amendments)
-            # manager.cleanup_worktree_sync(str(space.id), str(user_branch.id))
-            
             return Response({
                 'success': True,
                 'commit_sha': commit_sha,
@@ -352,7 +367,12 @@ class DraftChangeViewSet(viewsets.ViewSet):
                 'space_id': str(space.id),
                 'space_slug': space.slug,
             })
-            
+
+        except RebaseConflictError as exc:
+            return Response(
+                {'error': 'rebase_conflict', 'conflict_files': exc.conflicting_files},
+                status=status.HTTP_409_CONFLICT,
+            )
         except GitError as e:
             logger.error(f"[DraftChange] Git error: {e.message}", exc_info=True)
             return Response(

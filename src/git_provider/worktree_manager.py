@@ -25,12 +25,20 @@ logger = logging.getLogger(__name__)
 
 class GitError(Exception):
     """Exception raised for git operation failures."""
-    
+
     def __init__(self, message: str, returncode: int = 1, stderr: str = ''):
         self.message = message
         self.returncode = returncode
         self.stderr = stderr
         super().__init__(message)
+
+
+class RebaseConflictError(Exception):
+    """Raised when a rebase produces merge conflicts."""
+
+    def __init__(self, conflicting_files: List[str]):
+        self.conflicting_files = conflicting_files
+        super().__init__(f"Rebase conflict in {len(conflicting_files)} file(s)")
 
 
 class GitWorktreeManager:
@@ -437,9 +445,13 @@ class GitWorktreeManager:
             else:
                 # Create parent directories if needed
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                
-                # Write content
+
                 content = change.get('modified_content', '')
+                # Ensure text files end with a newline (POSIX standard).
+                # Prevents spurious last-line diffs when the editor strips the
+                # trailing newline that was present in the original file.
+                if content and not content.endswith('\n'):
+                    content += '\n'
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(content)
                 logger.debug(f"Written: {change['file_path']}")
@@ -581,11 +593,12 @@ class GitWorktreeManager:
         self,
         space_id: str,
         session_id: str,
+        repo_path: Optional[str] = None,
     ) -> None:
         """Synchronous version of cleanup_worktree."""
-        bare_path = self.get_bare_repo_path(space_id)
+        bare_path = repo_path if (repo_path and os.path.exists(repo_path)) else self.get_bare_repo_path(space_id)
         worktree_path = self.get_worktree_path(session_id)
-        
+
         if os.path.exists(worktree_path):
             try:
                 self._run_git_sync(
@@ -777,27 +790,107 @@ class GitWorktreeManager:
         branch_name: str,
         base_branch: str,
     ) -> List[str]:
-        """
-        List files changed between branch and base.
-        
-        Returns:
-            List of file paths that have changes
-        """
+        """List files changed between branch and base."""
         try:
             output = self._run_git_sync([
-                'diff',
-                '--name-only',
-                f'{base_branch}...{branch_name}'
+                'diff', '--name-only', f'{base_branch}...{branch_name}'
             ], cwd=repo_path)
-            
-            if not output:
-                return []
-            
-            return [f.strip() for f in output.split('\n') if f.strip()]
-            
+            return [f.strip() for f in output.split('\n') if f.strip()] if output else []
         except GitError as e:
             logger.debug(f"Error listing changed files: {e.message}")
             return []
+
+    def rebase_onto_base_sync(self, worktree_path: str, base_branch: str) -> None:
+        """
+        Rebase the current branch onto origin/{base_branch}.
+
+        Raises:
+            RebaseConflictError: if conflicts are detected — worktree is left in
+                                 mid-rebase state; caller must abort or resolve.
+        """
+        try:
+            self._run_git_sync(
+                ['rebase', f'origin/{base_branch}'],
+                cwd=worktree_path,
+            )
+        except GitError as e:
+            # Rebase failed — collect conflicting files then abort
+            conflict_files = self._get_conflicting_files_sync(worktree_path)
+            try:
+                self._run_git_sync(['rebase', '--abort'], cwd=worktree_path)
+            except GitError:
+                pass
+            raise RebaseConflictError(conflict_files) from e
+
+    def _get_conflicting_files_sync(self, worktree_path: str) -> List[str]:
+        """Return list of files with unresolved merge conflicts."""
+        try:
+            output = self._run_git_sync(
+                ['diff', '--name-only', '--diff-filter=U'],
+                cwd=worktree_path,
+            )
+            return [f.strip() for f in output.split('\n') if f.strip()]
+        except GitError:
+            return []
+
+    def soft_reset_to_base_sync(self, worktree_path: str, base_branch: str) -> List[str]:
+        """
+        Soft-reset the branch to origin/{base_branch}, keeping all file changes
+        in the working tree.
+
+        Returns:
+            List of file paths that were changed (and are now unstaged).
+        """
+        # Collect changed files before reset so caller can recreate drafts
+        changed = self.list_changed_files_sync(
+            worktree_path,
+            branch_name='HEAD',
+            base_branch=f'origin/{base_branch}',
+        )
+        self._run_git_sync(
+            ['reset', '--soft', f'origin/{base_branch}'],
+            cwd=worktree_path,
+        )
+        logger.info(f"[Worktree] Soft-reset to origin/{base_branch}, {len(changed)} files kept")
+        return changed
+
+    def hard_reset_to_base_sync(self, worktree_path: str, base_branch: str) -> None:
+        """Hard-reset the branch to origin/{base_branch}, discarding all commits."""
+        self._run_git_sync(
+            ['reset', '--hard', f'origin/{base_branch}'],
+            cwd=worktree_path,
+        )
+        logger.info(f"[Worktree] Hard-reset to origin/{base_branch}")
+
+    def read_file_sync(self, worktree_path: str, file_path: str) -> Optional[str]:
+        """Read a file from the worktree. Returns None if not found."""
+        full_path = os.path.join(worktree_path, file_path)
+        try:
+            with open(full_path, 'r', encoding='utf-8') as fh:
+                return fh.read()
+        except (FileNotFoundError, OSError):
+            return None
+
+    def read_file_at_base_sync(self, worktree_path: str, file_path: str, base_branch: str) -> Optional[str]:
+        """Read a file as it exists at origin/{base_branch}. Returns None if not found."""
+        try:
+            return self._run_git_sync(
+                ['show', f'origin/{base_branch}:{file_path}'],
+                cwd=worktree_path,
+            )
+        except GitError:
+            return None
+
+    def count_commits_ahead_sync(self, worktree_path: str, base_branch: str) -> int:
+        """Return number of commits on the branch that are not in base_branch."""
+        try:
+            output = self._run_git_sync(
+                ['rev-list', '--count', f'origin/{base_branch}..HEAD'],
+                cwd=worktree_path,
+            )
+            return int(output.strip()) if output.strip() else 0
+        except (GitError, ValueError):
+            return 0
 
 
 # Singleton instance

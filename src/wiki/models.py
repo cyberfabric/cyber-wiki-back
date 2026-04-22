@@ -860,7 +860,14 @@ class UserBranch(models.Model):
         blank=True,
         help_text='URL to the pull request'
     )
-    
+
+    # Conflict state (populated when rebase fails)
+    conflict_files = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Files with unresolved rebase conflicts'
+    )
+
     # Status
     class Status(models.TextChoices):
         ACTIVE = 'active', 'Active - Has staged changes'
