@@ -153,26 +153,29 @@ class GitWorktreeManager:
         args: List[str],
         cwd: Optional[str] = None,
         timeout: int = 300,
+        quiet: bool = False,
     ) -> str:
         """
         Run a git command synchronously.
-        
+
         Args:
             args: Git command arguments (without 'git' prefix)
             cwd: Working directory
             timeout: Command timeout in seconds
-            
+            quiet: When True, log failures at DEBUG instead of ERROR (for probe commands
+                   where failure is expected and handled by the caller).
+
         Returns:
             Command stdout
-            
+
         Raises:
             GitError: If command fails
         """
         import subprocess
-        
+
         cmd = ['git'] + args
         logger.debug(f"Running git command (sync): {' '.join(cmd)} in {cwd}")
-        
+
         try:
             result = subprocess.run(
                 cmd,
@@ -181,12 +184,15 @@ class GitWorktreeManager:
                 capture_output=True,
                 timeout=timeout,
             )
-            
+
             stdout_str = result.stdout.decode('utf-8', errors='replace').strip()
             stderr_str = result.stderr.decode('utf-8', errors='replace').strip()
-            
+
             if result.returncode != 0:
-                logger.error(f"Git command failed: {stderr_str}")
+                if quiet:
+                    logger.debug(f"Git command failed (expected): {stderr_str}")
+                else:
+                    logger.error(f"Git command failed: {stderr_str}")
                 raise GitError(
                     f"Git command failed: {' '.join(args)}",
                     returncode=result.returncode,
@@ -327,42 +333,41 @@ class GitWorktreeManager:
         base_branch: str = 'master',
         ssh_url: Optional[str] = None,
         local_repo_path: Optional[str] = None,
+        upstream_ssh_url: Optional[str] = None,
     ) -> str:
         """
         Synchronous version of create_worktree.
-        
+
         Args:
             space_id: Space UUID
             session_id: Session/branch UUID for worktree
             branch_name: Name for the branch
             base_branch: Base branch to create from
-            ssh_url: SSH URL to clone from (if no local path)
+            ssh_url: SSH URL for the edit fork (origin remote)
             local_repo_path: Local path to existing repo (takes precedence over ssh_url)
+            upstream_ssh_url: SSH URL for the canonical upstream repo. When provided the
+                              upstream remote is added and new branches are based on
+                              upstream/{base_branch} instead of the fork's master, ensuring
+                              only the user's own commits are included in PRs.
         """
         worktree_path = self.get_worktree_path(session_id)
-        
+
         # Determine the repo path to use
         if local_repo_path and os.path.exists(local_repo_path):
             # Use local repo directly (for development)
             repo_path = local_repo_path
             logger.info(f"Using local repo at {repo_path}")
-            
-            # Fetch latest (local repos may have remotes configured)
-            try:
-                self._run_git_sync(['fetch', '--all'], cwd=repo_path)
-            except GitError:
-                logger.debug("Fetch failed (may not have remotes), continuing...")
         else:
             # Use bare repo cache with SSH clone
             repo_path = self.get_bare_repo_path(space_id)
-            
+
             if not os.path.exists(repo_path):
                 if not ssh_url:
                     raise GitError(f"Bare repo not found and no SSH URL provided")
                 self.ensure_bare_repo_sync(space_id, ssh_url)
             else:
                 self._run_git_sync(['fetch', '--all'], cwd=repo_path)
-        
+
         # Remove existing worktree if it exists
         if os.path.exists(worktree_path):
             logger.warning(f"Removing existing worktree at {worktree_path}")
@@ -374,35 +379,60 @@ class GitWorktreeManager:
             except GitError:
                 # Fallback: just delete the directory
                 shutil.rmtree(worktree_path, ignore_errors=True)
-        
+
         # Check if branch already exists (locally or on remote)
         branch_exists = False
         try:
-            self._run_git_sync(['rev-parse', '--verify', branch_name], cwd=repo_path)
+            self._run_git_sync(['rev-parse', '--verify', branch_name], cwd=repo_path, quiet=True)
             branch_exists = True
             logger.info(f"Branch {branch_name} exists locally")
         except GitError:
             # Check if it exists on remote
             try:
-                self._run_git_sync(['rev-parse', '--verify', f'origin/{branch_name}'], cwd=repo_path)
+                self._run_git_sync(['rev-parse', '--verify', f'origin/{branch_name}'], cwd=repo_path, quiet=True)
                 branch_exists = True
                 logger.info(f"Branch {branch_name} exists on remote")
             except GitError:
                 pass
-        
+
         logger.info(f"Creating worktree for session {session_id}")
-        
+
         if branch_exists:
-            # Use existing branch
+            # Use existing branch — no upstream setup needed, just open it.
             self._run_git_sync([
                 'worktree', 'add',
                 worktree_path,
                 branch_name
             ], cwd=repo_path)
         else:
-            # Create new branch from base
-            # For local repos, base_branch might not have origin/ prefix
-            base_ref = f'origin/{base_branch}' if not local_repo_path else base_branch
+            # New branch: for bare (remote) repos, set up upstream remote so the
+            # branch is based on the canonical upstream rather than the fork's master.
+            # For local repos we never SSH-fetch from the server process (no keys);
+            # instead we rely on origin/{base} which is already fetched by fetch --all.
+            if upstream_ssh_url and not local_repo_path:
+                try:
+                    self._run_git_sync(
+                        ['remote', 'add', 'upstream', upstream_ssh_url],
+                        cwd=repo_path,
+                    )
+                    logger.info(f"[Worktree] Added upstream remote: {upstream_ssh_url}")
+                except GitError:
+                    try:
+                        self._run_git_sync(
+                            ['remote', 'set-url', 'upstream', upstream_ssh_url],
+                            cwd=repo_path,
+                        )
+                    except GitError:
+                        pass
+                try:
+                    self._run_git_sync(['fetch', 'upstream'], cwd=repo_path, timeout=60)
+                    logger.info(f"[Worktree] Fetched upstream/{base_branch}")
+                except GitError as e:
+                    logger.warning(f"[Worktree] Could not fetch upstream (will use origin): {e}")
+
+            # Create new branch from upstream/{base} when available, so the branch
+            # only contains the user's own commits relative to the canonical upstream.
+            base_ref = self._resolve_base_ref(repo_path, base_branch)
             try:
                 self._run_git_sync([
                     'worktree', 'add',
@@ -411,14 +441,14 @@ class GitWorktreeManager:
                     base_ref
                 ], cwd=repo_path)
             except GitError:
-                # Try without origin/ prefix
+                # Last-resort fallback: plain branch name
                 self._run_git_sync([
                     'worktree', 'add',
                     '-b', branch_name,
                     worktree_path,
                     base_branch
                 ], cwd=repo_path)
-        
+
         logger.info(f"Worktree created at {worktree_path}")
         return worktree_path
     
@@ -791,6 +821,11 @@ class GitWorktreeManager:
         base_branch: str,
     ) -> List[str]:
         """List files changed between branch and base."""
+        # Guard: if branch doesn't exist yet (e.g. commit still in progress) return early.
+        try:
+            self._run_git_sync(['rev-parse', '--verify', branch_name], cwd=repo_path, quiet=True)
+        except GitError:
+            return []
         try:
             output = self._run_git_sync([
                 'diff', '--name-only', f'{base_branch}...{branch_name}'
@@ -800,17 +835,42 @@ class GitWorktreeManager:
             logger.debug(f"Error listing changed files: {e.message}")
             return []
 
-    def rebase_onto_base_sync(self, worktree_path: str, base_branch: str) -> None:
+    def _resolve_base_ref(self, worktree_or_repo_path: str, base_branch: str) -> str:
         """
-        Rebase the current branch onto origin/{base_branch}.
+        Return upstream/{base_branch} if an upstream remote is configured, else origin/{base_branch}.
+        This ensures user branches are always measured against the canonical upstream, not a
+        potentially stale fork master.
+        """
+        try:
+            self._run_git_sync(
+                ['rev-parse', '--verify', f'upstream/{base_branch}'],
+                cwd=worktree_or_repo_path,
+                quiet=True,
+            )
+            return f'upstream/{base_branch}'
+        except GitError:
+            return f'origin/{base_branch}'
+
+    def rebase_onto_base_sync(self, worktree_path: str, base_branch: str, prefer_upstream: bool = False) -> None:
+        """
+        Rebase the current branch onto the base branch.
+
+        Args:
+            prefer_upstream: When True, use upstream/{base_branch} if that remote is
+                             configured (for the explicit "Rebase" action that fixes the
+                             branch base).  When False (default), always use
+                             origin/{base_branch} so the pre-commit rebase only stays on
+                             top of the fork master and does not replay fork-specific
+                             commits that may conflict.
 
         Raises:
             RebaseConflictError: if conflicts are detected — worktree is left in
                                  mid-rebase state; caller must abort or resolve.
         """
+        base_ref = self._resolve_base_ref(worktree_path, base_branch) if prefer_upstream else f'origin/{base_branch}'
         try:
             self._run_git_sync(
-                ['rebase', f'origin/{base_branch}'],
+                ['rebase', base_ref],
                 cwd=worktree_path,
             )
         except GitError as e:
@@ -835,32 +895,36 @@ class GitWorktreeManager:
 
     def soft_reset_to_base_sync(self, worktree_path: str, base_branch: str) -> List[str]:
         """
-        Soft-reset the branch to origin/{base_branch}, keeping all file changes
-        in the working tree.
+        Soft-reset the branch to origin/{base_branch}, keeping all file changes in the
+        working tree.  We deliberately use origin/ (fork master) here, not upstream, so
+        that only commits added ON TOP OF the fork master are surfaced as changed files.
+        Using upstream would also surface any fork-master divergence commits that the user
+        didn't author, polluting the resulting draft changes.
 
         Returns:
             List of file paths that were changed (and are now unstaged).
         """
-        # Collect changed files before reset so caller can recreate drafts
+        base_ref = f'origin/{base_branch}'
         changed = self.list_changed_files_sync(
             worktree_path,
             branch_name='HEAD',
-            base_branch=f'origin/{base_branch}',
+            base_branch=base_ref,
         )
         self._run_git_sync(
-            ['reset', '--soft', f'origin/{base_branch}'],
+            ['reset', '--soft', base_ref],
             cwd=worktree_path,
         )
-        logger.info(f"[Worktree] Soft-reset to origin/{base_branch}, {len(changed)} files kept")
+        logger.info(f"[Worktree] Soft-reset to {base_ref}, {len(changed)} files kept")
         return changed
 
     def hard_reset_to_base_sync(self, worktree_path: str, base_branch: str) -> None:
         """Hard-reset the branch to origin/{base_branch}, discarding all commits."""
+        base_ref = f'origin/{base_branch}'
         self._run_git_sync(
-            ['reset', '--hard', f'origin/{base_branch}'],
+            ['reset', '--hard', base_ref],
             cwd=worktree_path,
         )
-        logger.info(f"[Worktree] Hard-reset to origin/{base_branch}")
+        logger.info(f"[Worktree] Hard-reset to {base_ref}")
 
     def read_file_sync(self, worktree_path: str, file_path: str) -> Optional[str]:
         """Read a file from the worktree. Returns None if not found."""
@@ -872,20 +936,22 @@ class GitWorktreeManager:
             return None
 
     def read_file_at_base_sync(self, worktree_path: str, file_path: str, base_branch: str) -> Optional[str]:
-        """Read a file as it exists at origin/{base_branch}. Returns None if not found."""
+        """Read a file as it exists at the base branch (upstream if available, else origin)."""
+        base_ref = self._resolve_base_ref(worktree_path, base_branch)
         try:
             return self._run_git_sync(
-                ['show', f'origin/{base_branch}:{file_path}'],
+                ['show', f'{base_ref}:{file_path}'],
                 cwd=worktree_path,
             )
         except GitError:
             return None
 
     def count_commits_ahead_sync(self, worktree_path: str, base_branch: str) -> int:
-        """Return number of commits on the branch that are not in base_branch."""
+        """Return number of commits on the branch that are not in the base branch."""
+        base_ref = self._resolve_base_ref(worktree_path, base_branch)
         try:
             output = self._run_git_sync(
-                ['rev-list', '--count', f'origin/{base_branch}..HEAD'],
+                ['rev-list', '--count', f'{base_ref}..HEAD'],
                 cwd=worktree_path,
             )
             return int(output.strip()) if output.strip() else 0

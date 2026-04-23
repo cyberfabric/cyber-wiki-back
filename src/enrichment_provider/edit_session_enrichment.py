@@ -102,10 +102,12 @@ class CommitEnrichmentProvider(BaseEnrichmentProvider):
             
             enrichments = []
             
-            # Get active branches for this user (branches with commits not yet in PR)
+            # Only show commit enrichments for ACTIVE branches (no PR yet).
+            # Once a PR is open, the PR enrichment already represents the same diff;
+            # including both causes false conflicts in the virtual content builder.
             branches = UserBranch.objects.filter(
                 user=user,
-                status__in=[UserBranch.Status.ACTIVE, UserBranch.Status.PR_OPEN]
+                status=UserBranch.Status.ACTIVE,
             ).select_related('space')
             
             manager = get_worktree_manager()
@@ -126,12 +128,13 @@ class CommitEnrichmentProvider(BaseEnrichmentProvider):
                         logger.debug(f"[Commit] Repo not found at {repo_path}")
                         continue
                     
-                    # Get diff from git for this file
-                    # This compares branch to base (main) - shows what's not in main yet
+                    # Get diff from git for this file, using upstream/{base} when available
+                    # so the diff matches what the PR shows (canonical master as base).
+                    base_ref = manager._resolve_base_ref(repo_path, branch.base_branch)
                     file_diff = manager.get_file_diff_sync(
                         repo_path=repo_path,
                         branch_name=branch.branch_name,
-                        base_branch=branch.base_branch,
+                        base_branch=base_ref,
                         file_path=file_path
                     )
                     

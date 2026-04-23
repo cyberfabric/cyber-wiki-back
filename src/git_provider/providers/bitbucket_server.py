@@ -26,8 +26,12 @@ class BitbucketServerProvider(BaseGitProvider):
         self.headers = {
             'Content-Type': 'application/json',
         }
-        
-        # Add custom header if provided (for additional authentication)
+
+        # Add Bitbucket Server authentication (Bearer token or HTTP Basic)
+        if token:
+            self.headers['Authorization'] = f'Bearer {token}'
+
+        # Add custom header if provided (e.g. ZTA / Zero-Trust proxy token)
         if custom_header and custom_header_token:
             self.headers[custom_header] = custom_header_token
             logger.info(f"BitbucketServerProvider initialized with custom header: {custom_header} (token length: {len(custom_header_token)})")
@@ -470,7 +474,22 @@ class BitbucketServerProvider(BaseGitProvider):
             logger.debug(f"[Bitbucket] Fetching next page of diffs for PR #{pr_number}, start={start}")
         
         logger.debug(f"[Bitbucket] Fetched {len(all_diffs)} diffs for PR #{pr_number}")
-        
+
+        # If Bitbucket returned no diffs the PR diff may not be computed yet.
+        # Invalidate the cached empty response so the next enrichment fetch retries.
+        if not all_diffs and self.user and getattr(self.user, 'is_authenticated', False):
+            try:
+                from users.models import APIResponseCache
+                endpoint = f'/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_number}/diff'
+                APIResponseCache.objects.filter(
+                    user=self.user,
+                    provider_type='bitbucket_server',
+                    endpoint=endpoint,
+                ).delete()
+                logger.debug(f"[Bitbucket] Cleared empty diff cache for PR #{pr_number} (will retry next poll)")
+            except Exception:
+                pass
+
         # Convert to unified diff format
         diff_text = []
         for diff in all_diffs:
@@ -694,20 +713,21 @@ class BitbucketServerProvider(BaseGitProvider):
                 }
             }
         }
-        
+
         response = self._request('POST', endpoint, json=data)
-        
+        data = response.json()
+
         # Extract PR URL
-        links = response.get('links', {})
+        links = data.get('links', {})
         pr_url = links.get('self', [{}])[0].get('href', '')
         if not pr_url:
-            pr_url = f"{self.base_url}/projects/{to_project}/repos/{to_repo}/pull-requests/{response.get('id')}"
-        
+            pr_url = f"{self.base_url}/projects/{to_project}/repos/{to_repo}/pull-requests/{data.get('id')}"
+
         return {
-            'id': response.get('id'),
+            'id': data.get('id'),
             'url': pr_url,
-            'title': response.get('title'),
-            'state': response.get('state'),
+            'title': data.get('title'),
+            'state': data.get('state'),
         }
     
     def get_pull_request_status(
@@ -719,4 +739,4 @@ class BitbucketServerProvider(BaseGitProvider):
         """Get the status of a pull request."""
         endpoint = f"/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_id}"
         response = self._request('GET', endpoint)
-        return response.get('state', 'OPEN')
+        return response.json().get('state', 'OPEN')

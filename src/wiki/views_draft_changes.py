@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
 from .models import Space, UserDraftChange, UserBranch
+from .views_user_branch import _derive_upstream_ssh_url
 from users.permissions import IsEditorOrAbove
 from git_provider.worktree_manager import GitWorktreeManager, GitError, RebaseConflictError
 
@@ -297,24 +298,27 @@ class DraftChangeViewSet(viewsets.ViewSet):
                 base_branch=user_branch.base_branch,
                 ssh_url=space.edit_fork_ssh_url,
                 local_repo_path=space.edit_fork_local_path,
+                upstream_ssh_url=_derive_upstream_ssh_url(space),
             )
             logger.info(f"[DraftChange] Worktree at {worktree_path}")
 
-            # 3. Rebase onto latest base to keep the branch current
-            try:
-                manager.rebase_onto_base_sync(worktree_path, user_branch.base_branch)
-            except RebaseConflictError as exc:
-                user_branch.conflict_files = exc.conflicting_files
-                user_branch.save(update_fields=['conflict_files'])
-                manager.cleanup_worktree_sync(str(space.id), str(user_branch.id), repo_path=effective_repo_path)
-                return Response(
-                    {
-                        'error': 'rebase_conflict',
-                        'message': 'Your branch conflicts with the latest base branch.',
-                        'conflict_files': exc.conflicting_files,
-                    },
-                    status=status.HTTP_409_CONFLICT,
-                )
+            # 3. Rebase onto latest base (remote repos only — local repos are managed
+            #    by the user and are assumed current; their remotes may not be the fork).
+            if not space.edit_fork_local_path:
+                try:
+                    manager.rebase_onto_base_sync(worktree_path, user_branch.base_branch, prefer_upstream=True)
+                except RebaseConflictError as exc:
+                    user_branch.conflict_files = exc.conflicting_files
+                    user_branch.save(update_fields=['conflict_files'])
+                    manager.cleanup_worktree_sync(str(space.id), str(user_branch.id), repo_path=effective_repo_path)
+                    return Response(
+                        {
+                            'error': 'rebase_conflict',
+                            'message': 'Your branch conflicts with the latest base branch.',
+                            'conflict_files': exc.conflicting_files,
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
 
             # Clear any previous conflict state
             if user_branch.conflict_files:

@@ -158,6 +158,68 @@ def _get_space_enrichments(request, space_slug, start_time):
 
         logger.info(f"[SpaceEnrichments] Loaded {local_changes.count()} local changes")
 
+        # ── Committed changes (UserBranch, ACTIVE only — PR_OPEN uses PR enrichments) ──
+        from wiki.models import UserBranch
+        from git_provider.worktree_manager import GitWorktreeManager
+        import os as _os
+
+        user_branch = UserBranch.objects.filter(
+            user=request.user,
+            space=space,
+            status=UserBranch.Status.ACTIVE,
+        ).first()
+
+        commit_enrichment_count = 0
+        if user_branch and user_branch.last_commit_sha:
+            manager = GitWorktreeManager()
+            if space.edit_fork_local_path and _os.path.exists(space.edit_fork_local_path):
+                repo_path = space.edit_fork_local_path
+            else:
+                repo_path = manager.get_bare_repo_path(str(space.id))
+
+            if _os.path.exists(repo_path):
+                try:
+                    base_ref = manager._resolve_base_ref(repo_path, user_branch.base_branch)
+                    changed_files = manager.list_changed_files_sync(
+                        repo_path,
+                        branch_name=user_branch.branch_name,
+                        base_branch=base_ref,
+                    )
+                    for fp in changed_files:
+                        diff_result = manager.get_file_diff_sync(
+                            repo_path=repo_path,
+                            branch_name=user_branch.branch_name,
+                            base_branch=base_ref,
+                            file_path=fp,
+                        )
+                        if diff_result:
+                            _ensure_file(file_enrichments, fp)
+                            file_enrichments[fp]['commit'].append({
+                                'type': 'commit',
+                                'id': str(user_branch.id),
+                                'space_id': str(space.id),
+                                'space_slug': space.slug,
+                                'file_path': fp,
+                                'branch_name': user_branch.branch_name,
+                                'base_branch': user_branch.base_branch,
+                                'commit_sha': user_branch.last_commit_sha,
+                                'user': request.user.username,
+                                'user_full_name': request.user.get_full_name() or request.user.username,
+                                'created_at': user_branch.created_at.isoformat(),
+                                'updated_at': user_branch.updated_at.isoformat(),
+                                'diff_hunks': diff_result.get('hunks', []),
+                                'additions': diff_result.get('additions', 0),
+                                'deletions': diff_result.get('deletions', 0),
+                                'pr_id': user_branch.pr_id,
+                                'pr_url': user_branch.pr_url,
+                                'actions': ['unstage', 'create_pr'],
+                            })
+                            commit_enrichment_count += 1
+                except Exception as e:
+                    logger.warning(f"[SpaceEnrichments] Failed to load commit enrichments: {e}")
+
+        logger.info(f"[SpaceEnrichments] Loaded {commit_enrichment_count} commit enrichments")
+
         total_duration = time.time() - start_time
         logger.info(f"[SpaceEnrichments] Total time: {total_duration:.3f}s, files with enrichments: {len(file_enrichments)}")
 

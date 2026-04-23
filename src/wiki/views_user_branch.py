@@ -10,6 +10,8 @@ Endpoints for the SpaceWorkspaceBar:
 """
 import logging
 import os
+import re
+from typing import Optional
 
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -21,10 +23,30 @@ from rest_framework.viewsets import ViewSet
 from git_provider.factory import GitProviderFactory
 from git_provider.worktree_manager import GitWorktreeManager, GitError, RebaseConflictError
 from service_tokens.models import ServiceToken
+from users.cache import get_cache
+from users.models import APIResponseCache
 from users.permissions import IsEditorOrAbove
 from .models import Space, UserBranch, UserDraftChange
 
 logger = logging.getLogger(__name__)
+
+
+def _derive_upstream_ssh_url(space: Space) -> Optional[str]:
+    """
+    Construct the main repo's SSH URL from the fork's SSH URL + the space's
+    project key and repo slug.
+
+    For Bitbucket Server, fork URLs follow the same scheme as the main repo:
+      ssh://git@host[:port]/PROJECT/REPO.git
+    We simply replace the project/repo components.
+    """
+    fork_url = space.edit_fork_ssh_url
+    if not fork_url or not space.git_project_key or not space.git_repository_id:
+        return None
+    match = re.match(r'^(ssh://[^/]+)/[^/]+/[^/]+?(?:\.git)?$', fork_url)
+    if match:
+        return f"{match.group(1)}/{space.git_project_key}/{space.git_repository_id}.git"
+    return None
 
 
 def _serialize_branch(branch: UserBranch, files: list | None = None) -> dict:
@@ -57,8 +79,11 @@ def _get_branch_files(branch: UserBranch, space: Space) -> list:
         if not os.path.exists(repo_path):
             return []
 
+        # Use upstream/{base} when available so the file count matches the PR diff
+        # (canonical master as base, not the fork's potentially diverged master).
+        base_ref = manager._resolve_base_ref(repo_path, branch.base_branch)
         return manager.list_changed_files_sync(
-            repo_path, branch.branch_name, f'origin/{branch.base_branch}'
+            repo_path, branch.branch_name, base_ref
         )
     except Exception:
         return []
@@ -71,6 +96,58 @@ def _repo_path(manager: GitWorktreeManager, space: Space) -> str:
     return manager.get_bare_repo_path(str(space.id))
 
 
+def _sync_pr_status(branch: UserBranch, space: Space, user) -> None:
+    """
+    Check the actual PR state on the git provider and update branch.status when the
+    PR was closed/merged/deleted externally.  Silently ignores any API errors so it
+    never breaks the status endpoint.
+    """
+    from datetime import timedelta
+    from django.utils import timezone
+
+    # Rate-limit: only re-check if at least 2 minutes have passed since last save.
+    if branch.updated_at > timezone.now() - timedelta(minutes=2):
+        return
+
+    pr_id = branch.pr_id
+    try:
+        service_token = ServiceToken.objects.filter(
+            user=user, service_type=space.git_provider
+        ).first()
+        if not service_token:
+            return
+
+        # Clear any cached PR data so we get a fresh response.
+        APIResponseCache.objects.filter(
+            user=user,
+            endpoint__contains=f'/pull-requests/{pr_id}',
+        ).delete()
+
+        provider = GitProviderFactory.create_from_service_token(service_token)
+        try:
+            pr_state = provider.get_pull_request_status(
+                project_key=space.git_project_key,
+                repo_slug=space.git_repository_id,
+                pr_id=int(pr_id),
+            )
+        except Exception:
+            # 404 or any HTTP error means the PR no longer exists.
+            pr_state = 'DELETED'
+
+        if pr_state == 'MERGED':
+            branch.status = UserBranch.Status.ABANDONED
+            branch.save(update_fields=['status', 'updated_at'])
+            logger.info(f"[UserBranch] PR #{pr_id} merged — marked branch abandoned")
+        elif pr_state in ('DECLINED', 'DELETED'):
+            branch.status = UserBranch.Status.ACTIVE
+            branch.pr_id = None
+            branch.pr_url = None
+            branch.save(update_fields=['status', 'pr_id', 'pr_url', 'updated_at'])
+            logger.info(f"[UserBranch] PR #{pr_id} {pr_state.lower()} — reset branch to active")
+    except Exception as e:
+        logger.debug(f"[UserBranch] PR status sync skipped: {e}")
+
+
 def _open_worktree(manager: GitWorktreeManager, space: Space, branch: UserBranch) -> str:
     """Create (or reopen) a worktree for the branch. Fetches latest from remote."""
     return manager.create_worktree_sync(
@@ -80,6 +157,7 @@ def _open_worktree(manager: GitWorktreeManager, space: Space, branch: UserBranch
         base_branch=branch.base_branch,
         ssh_url=space.edit_fork_ssh_url,
         local_repo_path=space.edit_fork_local_path,
+        upstream_ssh_url=_derive_upstream_ssh_url(space),
     )
 
 
@@ -112,8 +190,14 @@ class UserBranchViewSet(ViewSet):
             status__in=[UserBranch.Status.ACTIVE, UserBranch.Status.PR_OPEN],
         ).first()
 
+        # When a PR_OPEN branch exists, verify the PR still exists on the remote.
+        # This syncs the local status if the PR was merged, declined, or deleted
+        # externally (e.g. the user closed it on Bitbucket directly).
+        if branch and branch.status == UserBranch.Status.PR_OPEN and branch.pr_id:
+            _sync_pr_status(branch, space, request.user)
+
         branch_data = None
-        if branch:
+        if branch and branch.status in (UserBranch.Status.ACTIVE, UserBranch.Status.PR_OPEN):
             branch_files = _get_branch_files(branch, space)
             branch_data = _serialize_branch(branch, branch_files)
 
@@ -187,6 +271,17 @@ class UserBranchViewSet(ViewSet):
         branch.save(update_fields=['pr_id', 'pr_url', 'status'])
 
         logger.info(f"[UserBranch] Created PR #{branch.pr_id} for {request.user.username}")
+
+        # Bust the git-provider PR cache so the new PR immediately appears as an enrichment.
+        try:
+            deleted = APIResponseCache.objects.filter(
+                user=request.user,
+                endpoint__contains='/pull-requests',
+            ).delete()[0]
+            if deleted:
+                logger.info(f"[UserBranch] Invalidated {deleted} PR cache entries for {request.user.username}")
+        except Exception as e:
+            logger.warning(f"[UserBranch] Failed to clear PR cache: {e}")
 
         return Response({
             'pr_id': branch.pr_id,
@@ -360,7 +455,7 @@ class UserBranchViewSet(ViewSet):
         rp = _repo_path(manager, space)
         try:
             worktree_path = _open_worktree(manager, space, branch)
-            manager.rebase_onto_base_sync(worktree_path, branch.base_branch)
+            manager.rebase_onto_base_sync(worktree_path, branch.base_branch, prefer_upstream=True)
             manager.push_branch_sync(worktree_path, branch.branch_name, force=True)
             branch.conflict_files = []
             branch.save(update_fields=['conflict_files'])
