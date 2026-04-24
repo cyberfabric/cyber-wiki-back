@@ -95,7 +95,19 @@ class FileMappingViewSet(viewsets.ModelViewSet):
         space = get_object_or_404(Space, slug=space_slug)
         serializer = FileMappingCreateSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        
+
+        # Update existing mapping if one already exists for this space + file_path
+        file_path = serializer.validated_data.get('file_path', '')
+        existing = FileMapping.objects.filter(space=space, file_path=file_path).first()
+        if existing:
+            update_serializer = FileMappingCreateSerializer(
+                existing, data=request.data, context={'request': request}
+            )
+            update_serializer.is_valid(raise_exception=True)
+            mapping = update_serializer.save()
+            response_serializer = FileMappingSerializer(mapping)
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
+
         mapping = serializer.save(space=space, created_by=request.user)
         response_serializer = FileMappingSerializer(mapping)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)

@@ -215,6 +215,76 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
         
         return hunks
     
+    def get_enrichments_stream(self, source_uri: str, user):
+        """
+        Generator version of get_enrichments that yields progress events.
+
+        Yields dicts:
+          {'type': 'progress', 'message': str}   -- during processing
+          {'type': 'result',   'data': list}      -- final enrichments list
+          {'type': 'error',    'message': str}    -- on hard failure (also yields result=[])
+        """
+        start_time = time.time()
+        try:
+            address = SourceAddress.parse(source_uri)
+            service_token = ServiceToken.objects.filter(
+                user=user, service_type=address.provider
+            ).first()
+            if not service_token:
+                yield {'type': 'result', 'data': []}
+                return
+
+            provider = GitProviderFactory.create_from_service_token(service_token)
+            prs_response = provider.list_pull_requests(
+                repo_id=address.repository, state='open', page=1, per_page=1000
+            )
+            prs = prs_response.get('pull_requests', [])
+            file_name = address.path.split('/')[-1]
+
+            yield {'type': 'progress', 'message': f'Checking {len(prs)} open PRs for {file_name}…'}
+
+            enrichments = []
+            for idx, pr in enumerate(prs, 1):
+                title = pr['title']
+                short_title = title[:50] + '…' if len(title) > 50 else title
+                yield {'type': 'progress', 'message': f"PR #{pr['number']} ({idx}/{len(prs)}): {short_title}"}
+
+                try:
+                    diff_text = provider.get_pull_request_diff(
+                        repo_id=address.repository, pr_number=pr['number']
+                    )
+                    if not diff_text:
+                        continue
+                    if (f'+++ b/{address.path}' not in diff_text and
+                            f'+++ {address.path}' not in diff_text):
+                        continue
+                    hunks = self._parse_diff_hunks(diff_text, address.path)
+                    if hunks:
+                        enrichments.append({
+                            'type': 'pr_diff',
+                            'pr_number': pr['number'],
+                            'pr_title': pr['title'],
+                            'pr_author': pr['author'],
+                            'pr_state': pr['state'],
+                            'pr_url': pr['url'],
+                            'from_branch': pr.get('from_branch', ''),
+                            'created_at': pr['created_at'],
+                            'diff_hunks': hunks,
+                        })
+                except Exception as e:
+                    logger.warning(f"[PR] Stream: failed on PR #{pr.get('number')}: {e}")
+
+            logger.info(
+                f"[PR] Stream: {len(enrichments)} match(es) in {time.time() - start_time:.3f}s "
+                f"for {address.path}"
+            )
+            yield {'type': 'result', 'data': enrichments}
+
+        except Exception as e:
+            logger.error(f"[PR] Stream failed: {e}")
+            yield {'type': 'error', 'message': str(e)}
+            yield {'type': 'result', 'data': []}
+
     def get_enrichment_type(self) -> str:
         return 'pr_diff'
     

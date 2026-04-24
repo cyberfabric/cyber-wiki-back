@@ -459,32 +459,90 @@ class GitWorktreeManager:
     ) -> None:
         """
         Apply file changes to a worktree.
-        
+
+        When original_content is provided and differs from the current file on
+        disk (i.e. a previous commit already modified the file), a 3-way merge
+        is performed via ``git merge-file`` so that both sets of changes are
+        preserved.  If the merge produces conflicts the conflict-marker text is
+        written to the file (the commit will still succeed so the user can see
+        what needs resolving).
+
         Args:
             worktree_path: Path to the worktree
-            changes: List of changes from EditSession.pending_changes
+            changes: List of change dicts with keys file_path, change_type,
+                     modified_content, and optionally original_content.
         """
+        import subprocess, tempfile
+
         for change in changes:
             file_path = os.path.join(worktree_path, change['file_path'])
             change_type = change.get('change_type', 'modify')
-            
+
             if change_type == 'delete':
                 if os.path.exists(file_path):
                     os.remove(file_path)
                     logger.debug(f"Deleted: {change['file_path']}")
-            else:
-                # Create parent directories if needed
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                continue
 
-                content = change.get('modified_content', '')
-                # Ensure text files end with a newline (POSIX standard).
-                # Prevents spurious last-line diffs when the editor strips the
-                # trailing newline that was present in the original file.
-                if content and not content.endswith('\n'):
-                    content += '\n'
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                logger.debug(f"Written: {change['file_path']}")
+            # Create parent directories if needed
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+            def _normalise(text: str) -> str:
+                if text and not text.endswith('\n'):
+                    return text + '\n'
+                return text
+
+            modified = _normalise(change.get('modified_content', ''))
+            original = _normalise(change.get('original_content', ''))
+
+            # If the file already exists on the branch and we have an original
+            # snapshot, try to merge rather than overwrite so that commits made
+            # by previous drafts on the same branch are not reverted.
+            if original and os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as fh:
+                    current = fh.read()
+
+                if current != original:
+                    # File was already modified by a prior commit on this branch.
+                    # Use git merge-file to apply diff(original→modified) onto current.
+                    with tempfile.TemporaryDirectory() as tmp:
+                        cur_f  = os.path.join(tmp, 'current')
+                        base_f = os.path.join(tmp, 'base')
+                        mod_f  = os.path.join(tmp, 'modified')
+                        with open(cur_f,  'w', encoding='utf-8') as fh: fh.write(current)
+                        with open(base_f, 'w', encoding='utf-8') as fh: fh.write(original)
+                        with open(mod_f,  'w', encoding='utf-8') as fh: fh.write(modified)
+
+                        result = subprocess.run(
+                            ['git', 'merge-file', '-p', cur_f, base_f, mod_f],
+                            capture_output=True, text=True,
+                        )
+                        if result.returncode >= 0:
+                            # returncode == 0: clean; > 0: conflicts (output still useful)
+                            merged = result.stdout
+                            if result.returncode > 0:
+                                logger.warning(
+                                    f"[apply_changes] {change['file_path']}: "
+                                    f"{result.returncode} conflict block(s) after merge"
+                                )
+                        else:
+                            # git itself failed — fall back to modified content
+                            logger.error(
+                                f"[apply_changes] git merge-file error for "
+                                f"{change['file_path']}: {result.stderr}"
+                            )
+                            merged = modified
+
+                    with open(file_path, 'w', encoding='utf-8') as fh:
+                        fh.write(merged)
+                    logger.debug(f"Merged:  {change['file_path']}")
+                    continue
+
+            # No previous commit touched the file (or no original provided):
+            # safe to write modified_content directly.
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(modified)
+            logger.debug(f"Written: {change['file_path']}")
     
     async def commit_changes(
         self,

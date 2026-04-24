@@ -40,15 +40,18 @@ class EditEnrichmentProvider(BaseEnrichmentProvider):
             
             enrichments = []
             
-            # Get draft changes from UserDraftChange model
+            # Get draft changes from all tasks (branches) for this file
             draft_changes = UserDraftChange.objects.filter(
                 user=user,
                 file_path=file_path
-            ).select_related('space')
-            
+            ).select_related('space', 'user_branch')
+
             for change in draft_changes:
                 diff_hunks = change.generate_diff_hunks()
-                
+                # Skip stale drafts that have no actual content difference
+                if change.change_type == 'modify' and not diff_hunks:
+                    logger.debug(f"[Edit] Skipping empty draft {change.id} for {file_path}")
+                    continue
                 enrichments.append({
                     'type': 'edit',
                     'id': str(change.id),
@@ -59,6 +62,8 @@ class EditEnrichmentProvider(BaseEnrichmentProvider):
                     'description': change.description or '',
                     'user': user.username,
                     'user_full_name': user.get_full_name() or user.username,
+                    'branch_id': str(change.user_branch_id) if change.user_branch_id else None,
+                    'task_name': change.user_branch.name if change.user_branch_id else None,
                     'created_at': change.created_at.isoformat(),
                     'updated_at': change.updated_at.isoformat(),
                     'diff_hunks': diff_hunks,
@@ -153,6 +158,7 @@ class CommitEnrichmentProvider(BaseEnrichmentProvider):
                             'file_path': file_path,
                             'branch_name': branch.branch_name,
                             'base_branch': branch.base_branch,
+                            'task_name': branch.name or None,
                             'commit_sha': branch.last_commit_sha,
                             'user': user.username,
                             'user_full_name': user.get_full_name() or user.username,

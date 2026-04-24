@@ -51,6 +51,7 @@ class DraftChangeViewSet(viewsets.ViewSet):
                 'file_path': change.file_path,
                 'change_type': change.change_type,
                 'description': change.description,
+                'branch_id': str(change.user_branch_id) if change.user_branch_id else None,
                 'created_at': change.created_at.isoformat(),
                 'updated_at': change.updated_at.isoformat(),
             })
@@ -94,13 +95,23 @@ class DraftChangeViewSet(viewsets.ViewSet):
             )
         
         space = get_object_or_404(Space, id=space_id)
-        
+
+        # Associate draft with the currently selected task (branch) if one is active.
+        selected_branch = UserBranch.get_selected_for_user(request.user, space)
+
+        # Lookup key: scoped to branch when one is selected, otherwise fallback to
+        # (user, space, file_path) for unassigned drafts.
+        if selected_branch:
+            lookup = {'user': request.user, 'user_branch': selected_branch, 'file_path': file_path}
+        else:
+            # No task selected — find any unassigned draft for this file
+            lookup = {'user': request.user, 'space': space, 'file_path': file_path, 'user_branch': None}
+
         # Create or update draft change
         change, created = UserDraftChange.objects.update_or_create(
-            user=request.user,
-            space=space,
-            file_path=file_path,
+            **lookup,
             defaults={
+                'space': space,
                 'original_content': original_content,
                 'modified_content': modified_content,
                 'change_type': change_type,
@@ -217,17 +228,21 @@ class DraftChangeViewSet(viewsets.ViewSet):
     def commit(self, request):
         """
         Commit selected draft changes to git.
-        
-        This action:
-        1. Takes a list of draft change IDs
-        2. Creates/gets the user's branch in the fork
-        3. Applies the changes and creates a commit
-        4. Deletes the draft changes (they're now in git)
-        
-        The changes will then appear as 'commit' enrichments.
+
+        Body:
+          change_ids     – list of draft change UUIDs to commit
+          commit_message – optional commit message
+          branch_id      – optional task (UserBranch) UUID; defaults to selected task
+
+        Flow:
+        1. Resolve target branch (branch_id or selected task)
+        2. Open/create worktree for that branch
+        3. Apply changes and push
+        4. Delete the draft changes
         """
         change_ids = request.data.get('change_ids', [])
         commit_message = request.data.get('commit_message', '')
+        branch_id = request.data.get('branch_id')
         
         if not change_ids:
             return Response(
@@ -274,11 +289,33 @@ class DraftChangeViewSet(viewsets.ViewSet):
                 commit_message = f"Update {file_count} files"
         
         try:
-            # 1. Get or create user's branch
-            user_branch, branch_created = UserBranch.get_or_create_for_user(
-                user=request.user,
-                space=space
-            )
+            # 1. Resolve target branch
+            branch_created = False
+            if branch_id:
+                user_branch = UserBranch.objects.filter(
+                    id=branch_id, user=request.user, space=space,
+                    status__in=[UserBranch.Status.ACTIVE, UserBranch.Status.PR_OPEN],
+                ).first()
+                if not user_branch:
+                    return Response(
+                        {'error': 'Branch not found or not active'},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+            else:
+                # Use selected task, or create a new one
+                user_branch = UserBranch.get_selected_for_user(request.user, space)
+                if not user_branch:
+                    # Auto-create a nameless task so backward-compat flow still works
+                    user_branch = UserBranch.objects.create(
+                        user=request.user,
+                        space=space,
+                        name='',
+                        branch_name=UserBranch.generate_branch_name(request.user),
+                        base_branch=space.git_default_branch or 'master',
+                    )
+                    UserBranch.set_selected(user_branch)
+                    branch_created = True
+
             logger.info(
                 f"[DraftChange] {'Created' if branch_created else 'Using'} branch "
                 f"{user_branch.branch_name} for {request.user.username}"
@@ -325,9 +362,11 @@ class DraftChangeViewSet(viewsets.ViewSet):
                 user_branch.conflict_files = []
                 user_branch.save(update_fields=['conflict_files'])
 
-            # 4. Apply draft changes
+            # 4. Apply draft changes (pass original_content so apply_changes can
+            #    3-way merge when a previous commit already touched the same file)
             changes_list = [
                 {'file_path': c.file_path, 'change_type': c.change_type,
+                 'original_content': c.original_content,
                  'modified_content': c.modified_content}
                 for c in changes
             ]
@@ -350,9 +389,11 @@ class DraftChangeViewSet(viewsets.ViewSet):
             logger.info(f"[DraftChange] Pushed branch {user_branch.branch_name}")
 
             # 7. Update branch record and remove drafts
+            # Preserve PR_OPEN status — a new push updates the existing PR in-place.
             deleted_count = changes.count()
             user_branch.last_commit_sha = commit_sha
-            user_branch.status = UserBranch.Status.ACTIVE
+            if user_branch.status != UserBranch.Status.PR_OPEN:
+                user_branch.status = UserBranch.Status.ACTIVE
             user_branch.save(update_fields=['last_commit_sha', 'status', 'conflict_files'])
             changes.delete()
 

@@ -748,10 +748,20 @@ class UserDraftChange(models.Model):
         help_text='Description of this change'
     )
     
+    # Task association (which branch/task this draft belongs to)
+    user_branch = models.ForeignKey(
+        'UserBranch',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='draft_changes',
+        help_text='Task (branch) this draft is staged for'
+    )
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'wiki_user_draft_change'
         verbose_name = 'User Draft Change'
@@ -761,7 +771,13 @@ class UserDraftChange(models.Model):
             models.Index(fields=['user', 'space']),
             models.Index(fields=['file_path']),
         ]
-        unique_together = [['user', 'space', 'file_path']]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'user_branch', 'file_path'],
+                condition=models.Q(user_branch__isnull=False),
+                name='unique_draft_per_branch_file',
+            ),
+        ]
     
     def __str__(self):
         return f"{self.user.username}: {self.file_path}"
@@ -831,6 +847,17 @@ class UserBranch(models.Model):
         related_name='edit_branches'
     )
     
+    # Task info
+    name = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text='Human-readable task name (e.g. "Requirements documents fix")'
+    )
+    is_selected = models.BooleanField(
+        default=False,
+        help_text='Whether this is the currently active task for this user+space'
+    )
+
     # Branch info
     branch_name = models.CharField(
         max_length=200,
@@ -901,26 +928,33 @@ class UserBranch(models.Model):
         return f"{self.user.username}: {self.branch_name}"
     
     @classmethod
-    def get_or_create_for_user(cls, user, space):
-        """Get or create the active branch for a user in a space."""
-        branch, created = cls.objects.get_or_create(
-            user=user,
-            space=space,
-            status=cls.Status.ACTIVE,
-            defaults={
-                'branch_name': cls.generate_branch_name(user, space),
-                'base_branch': space.git_default_branch or 'master',
-            }
-        )
-        return branch, created
-    
+    def get_selected_for_user(cls, user, space):
+        """Return the currently selected branch for user+space, or None."""
+        return cls.objects.filter(
+            user=user, space=space, is_selected=True,
+            status__in=[cls.Status.ACTIVE, cls.Status.PR_OPEN],
+        ).first()
+
+    @classmethod
+    def set_selected(cls, branch):
+        """Mark branch as selected; deselect all others for same user+space."""
+        cls.objects.filter(
+            user=branch.user, space=branch.space, is_selected=True
+        ).exclude(pk=branch.pk).update(is_selected=False)
+        branch.is_selected = True
+        branch.save(update_fields=['is_selected'])
+
     @staticmethod
-    def generate_branch_name(user, space):
-        """Generate unique branch name."""
+    def generate_branch_name(user, task_name=''):
+        """Generate a git branch name from a task name (or random)."""
         import uuid as uuid_module
+        import re
         short_id = str(uuid_module.uuid4())[:8]
-        safe_username = user.username.lower().replace('.', '-')
-        return f"doclab/{safe_username}/edit-{short_id}"
+        safe_username = re.sub(r'[^a-z0-9]', '-', user.username.lower()).strip('-')[:20]
+        if task_name:
+            slug = re.sub(r'[^a-z0-9]+', '-', task_name.lower()).strip('-')[:30]
+            return f"doclab/{safe_username}/{slug}-{short_id}"
+        return f"doclab/{safe_username}/task-{short_id}"
 
 
 class SpacePermission(models.Model):

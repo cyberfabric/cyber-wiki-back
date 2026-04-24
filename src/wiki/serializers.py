@@ -358,7 +358,7 @@ class FileMappingSerializer(serializers.ModelSerializer):
         model = FileMapping
         fields = [
             'id', 'space', 'space_slug', 'file_path', 'is_folder',
-            'is_visible', 'display_name', 'display_name_source',
+            'is_visible', 'effective_is_visible', 'display_name', 'display_name_source',
             'children_display_name_source',
             'extracted_name', 'extracted_at', 'effective_display_name',
             'sort_order', 'icon', 'apply_to_children', 'parent_rule',

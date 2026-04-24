@@ -731,13 +731,47 @@ class BitbucketServerProvider(BaseGitProvider):
             'state': data.get('state'),
         }
     
+    def decline_pull_request(
+        self,
+        project_key: str,
+        repo_slug: str,
+        pr_id: int,
+    ) -> None:
+        """Decline (close) an open pull request on Bitbucket Server.
+
+        Bitbucket Server requires the current PR version in the decline request
+        to guard against concurrent updates, so we fetch the PR first.
+        """
+        pr_endpoint = f"/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_id}"
+        pr_response = self._request('GET', pr_endpoint)
+        pr_data = pr_response.json()
+        version = pr_data.get('version', 0)
+
+        decline_endpoint = f"{pr_endpoint}/decline"
+        self._request('POST', decline_endpoint, json={'version': version})
+
     def get_pull_request_status(
         self,
         project_key: str,
         repo_slug: str,
         pr_id: int,
     ) -> str:
-        """Get the status of a pull request."""
+        """Get the status of a pull request.
+
+        Returns 'DELETED' when the PR cannot be found (404 or error response
+        from Bitbucket Server, which sometimes returns 200+errors JSON for
+        non-existent PRs instead of a proper 404).
+        """
         endpoint = f"/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_id}"
-        response = self._request('GET', endpoint)
-        return response.json().get('state', 'OPEN')
+        try:
+            response = self._request('GET', endpoint)
+        except Exception:
+            return 'DELETED'
+        try:
+            data = response.json()
+        except Exception:
+            return 'DELETED'
+        # Bitbucket Server may return 200 + {"errors": [...]} for deleted PRs
+        if data.get('errors') or 'state' not in data:
+            return 'DELETED'
+        return data['state']
