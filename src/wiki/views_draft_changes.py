@@ -16,7 +16,9 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse
 from .models import Space, UserDraftChange, UserBranch
 from .views_user_branch import _derive_upstream_ssh_url
 from users.permissions import IsEditorOrAbove
-from git_provider.worktree_manager import GitWorktreeManager, GitError, RebaseConflictError
+from git_provider.worktree_manager import (
+    GitWorktreeManager, GitError, RebaseConflictError, EmptyCommitError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -376,13 +378,41 @@ class DraftChangeViewSet(viewsets.ViewSet):
             # 5. Commit with user as author
             author_name = request.user.get_full_name() or request.user.username
             author_email = request.user.email or f"{request.user.username}@doclab.local"
-            commit_sha = manager.commit_changes_sync(
-                worktree_path=worktree_path,
-                message=commit_message,
-                author_name=author_name,
-                author_email=author_email,
-            )
-            logger.info(f"[DraftChange] Created commit {commit_sha[:8]}")
+            try:
+                commit_sha = manager.commit_changes_sync(
+                    worktree_path=worktree_path,
+                    message=commit_message,
+                    author_name=author_name,
+                    author_email=author_email,
+                )
+                logger.info(f"[DraftChange] Created commit {commit_sha[:8]}")
+            except EmptyCommitError:
+                # Drafts whose content already matches HEAD (e.g. a prior commit
+                # succeeded but the response was lost) leave nothing to stage.
+                # Treat as no-op success: clear the stale drafts, keep the
+                # branch pointed at HEAD, skip the empty push.
+                deleted_count = changes.count()
+                head_sha = manager.head_sha_sync(worktree_path)
+                user_branch.last_commit_sha = head_sha
+                user_branch.save(update_fields=['last_commit_sha'])
+                changes.delete()
+                manager.cleanup_worktree_sync(
+                    str(space.id), str(user_branch.id), repo_path=effective_repo_path
+                )
+                logger.info(
+                    f"[DraftChange] No-op commit for {request.user.username} "
+                    f"in {space.slug}: drafts already match HEAD ({head_sha[:8]})"
+                )
+                return Response({
+                    'success': True,
+                    'commit_sha': head_sha,
+                    'branch_name': user_branch.branch_name,
+                    'files_committed': 0,
+                    'drafts_cleared': deleted_count,
+                    'space_id': str(space.id),
+                    'space_slug': space.slug,
+                    'noop': True,
+                })
 
             # 6. Push to fork
             manager.push_branch_sync(worktree_path, user_branch.branch_name)

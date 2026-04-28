@@ -106,6 +106,7 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
                             'pr_url': pr['url'],
                             'from_branch': pr.get('from_branch', ''),
                             'created_at': pr['created_at'],
+                            'reviewers': pr.get('reviewers', []),
                             'diff_hunks': hunks,
                         })
                 
@@ -269,6 +270,7 @@ class PREnrichmentProvider(BaseEnrichmentProvider):
                             'pr_url': pr['url'],
                             'from_branch': pr.get('from_branch', ''),
                             'created_at': pr['created_at'],
+                            'reviewers': pr.get('reviewers', []),
                             'diff_hunks': hunks,
                         })
                 except Exception as e:

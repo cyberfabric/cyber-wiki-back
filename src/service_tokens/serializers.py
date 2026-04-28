@@ -12,9 +12,10 @@ class ServiceTokenSerializer(serializers.ModelSerializer):
         model = ServiceToken
         fields = [
             'id', 'service_type', 'base_url', 'username', 'header_name', 
-            'name', 'has_token', 'created_at', 'updated_at'
+            'name', 'has_token', 'created_at', 'updated_at',
+            'last_validated_at', 'last_validation_valid', 'last_validation_message',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'last_validated_at', 'last_validation_valid', 'last_validation_message']
     
     username = serializers.SerializerMethodField()
     has_token = serializers.SerializerMethodField()

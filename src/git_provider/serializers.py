@@ -34,6 +34,15 @@ class TreeEntrySerializer(serializers.Serializer):
     sha = serializers.CharField(required=False, allow_null=True)
 
 
+class ReviewerSerializer(serializers.Serializer):
+    """Serializer for PR reviewer."""
+    username = serializers.CharField()
+    display_name = serializers.CharField()
+    avatar_url = serializers.CharField(allow_blank=True)
+    role = serializers.CharField()
+    status = serializers.CharField()
+
+
 class PullRequestSerializer(serializers.Serializer):
     """Serializer for pull request."""
     number = serializers.IntegerField()
@@ -43,6 +52,7 @@ class PullRequestSerializer(serializers.Serializer):
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
     html_url = serializers.URLField()
+    reviewers = ReviewerSerializer(many=True, required=False, default=[])
 
 
 class CommitSerializer(serializers.Serializer):

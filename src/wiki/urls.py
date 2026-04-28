@@ -11,6 +11,7 @@ from .views_links import DocumentLinkViewSet
 from .views_file_mapping import FileMappingViewSet
 from .views_draft_changes import DraftChangeViewSet
 from .views_user_branch import UserBranchViewSet
+from .views_my_reviews import my_reviews
 
 router = DefaultRouter()
 
@@ -37,4 +38,5 @@ file_mapping_router.register(r'file-mappings', FileMappingViewSet, basename='fil
 
 urlpatterns = router.urls + [
     path('spaces/<slug:space_slug>/', include(file_mapping_router.urls)),
+    path('my-reviews/', my_reviews, name='my-reviews'),
 ]

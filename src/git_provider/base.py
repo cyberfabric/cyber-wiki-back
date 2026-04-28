@@ -127,7 +127,7 @@ class BaseGitProvider(ABC):
         pass
     
     @abstractmethod
-    def list_pull_requests(self, repo_id: str, state: str = 'open', page: int = 1, per_page: int = 30) -> Dict[str, Any]:
+    def list_pull_requests(self, repo_id: str, state: str = 'open', page: int = 1, per_page: int = 30, reviewer: Optional[str] = None) -> Dict[str, Any]:
         """
         List pull requests for a repository.
         
@@ -136,6 +136,7 @@ class BaseGitProvider(ABC):
             state: PR state ('open', 'closed', 'merged', 'all')
             page: Page number
             per_page: Number of PRs per page
+            reviewer: Filter by reviewer username
         
         Returns:
             Dict with 'pull_requests' list and pagination metadata

@@ -67,6 +67,22 @@ class ServiceToken(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    last_validated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Timestamp of the last token validation check'
+    )
+    last_validation_valid = models.BooleanField(
+        null=True,
+        blank=True,
+        help_text='Result of the last validation check (True=valid, False=invalid, None=never checked)'
+    )
+    last_validation_message = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='Human-readable message from the last validation check'
+    )
     
     class Meta:
         # For custom_header tokens, we need header_name in the unique constraint

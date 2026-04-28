@@ -212,6 +212,11 @@ class FileMappingService:
             # Explicit project key (Bitbucket Server)
             project_key = space.git_project_key
             repo_slug = space.git_repository_id or space.git_repository_name or ''
+        elif space.git_repository_id and '/' in space.git_repository_id:
+            # GitHub format "owner/repo" in repository_id
+            parts = space.git_repository_id.split('/', 1)
+            project_key = parts[0]
+            repo_slug = parts[1]
         elif space.git_repository_id and '_' in space.git_repository_id:
             # Repository ID in format "project_repo" (legacy)
             parts = space.git_repository_id.split('_', 1)

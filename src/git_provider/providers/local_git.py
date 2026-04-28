@@ -353,7 +353,7 @@ class LocalGitProvider(BaseGitProvider):
         except subprocess.CalledProcessError as e:
             raise ValueError(f"Path not found: {path} in branch {branch}") from e
     
-    def list_pull_requests(self, repo_id: str, state: str = 'open', page: int = 1, per_page: int = 30) -> Dict[str, Any]:
+    def list_pull_requests(self, repo_id: str, state: str = 'open', page: int = 1, per_page: int = 30, reviewer: Optional[str] = None) -> Dict[str, Any]:
         """
         List pull requests - not supported for local repositories.
         """

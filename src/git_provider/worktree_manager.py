@@ -41,6 +41,14 @@ class RebaseConflictError(Exception):
         super().__init__(f"Rebase conflict in {len(conflicting_files)} file(s)")
 
 
+class EmptyCommitError(GitError):
+    """Raised when commit_changes is asked to commit a worktree that already
+    matches HEAD (e.g. a prior commit succeeded but the response was lost)."""
+
+    def __init__(self, message: str = "No changes to commit (working tree matches HEAD after staging)"):
+        super().__init__(message, returncode=1)
+
+
 class GitWorktreeManager:
     """
     Manages bare repositories and worktrees for edit sessions.
@@ -82,14 +90,20 @@ class GitWorktreeManager:
     def _get_git_env(self) -> Dict[str, str]:
         """Get environment variables for git commands."""
         env = os.environ.copy()
-        
+
         if self.ssh_key_path and os.path.exists(self.ssh_key_path):
             env['GIT_SSH_COMMAND'] = (
                 f'ssh -i {self.ssh_key_path} '
                 f'-o StrictHostKeyChecking=no '
                 f'-o UserKnownHostsFile=/dev/null'
             )
-        
+
+        # Force a committer identity so commits work in worktrees that lack
+        # a global git config (containers, CI, sandboxes). The author is still
+        # set explicitly via --author for user attribution.
+        env.setdefault('GIT_COMMITTER_NAME', 'CyberWiki')
+        env.setdefault('GIT_COMMITTER_EMAIL', 'noreply@cyberwiki.local')
+
         return env
     
     async def _run_git(
@@ -133,11 +147,12 @@ class GitWorktreeManager:
             stderr_str = stderr.decode('utf-8', errors='replace').strip()
             
             if process.returncode != 0:
-                logger.error(f"Git command failed: {stderr_str}")
+                logger.error(f"Git command failed: stderr={stderr_str!r} stdout={stdout_str!r}")
+                detail = stderr_str or stdout_str or f'exit {process.returncode}'
                 raise GitError(
-                    f"Git command failed: {' '.join(args)}",
+                    f"Git command failed ({' '.join(args)}): {detail}",
                     returncode=process.returncode,
-                    stderr=stderr_str
+                    stderr=stderr_str or stdout_str
                 )
             
             if stderr_str:
@@ -190,13 +205,14 @@ class GitWorktreeManager:
 
             if result.returncode != 0:
                 if quiet:
-                    logger.debug(f"Git command failed (expected): {stderr_str}")
+                    logger.debug(f"Git command failed (expected): stderr={stderr_str!r} stdout={stdout_str!r}")
                 else:
-                    logger.error(f"Git command failed: {stderr_str}")
+                    logger.error(f"Git command failed: stderr={stderr_str!r} stdout={stdout_str!r}")
+                detail = stderr_str or stdout_str or f'exit {result.returncode}'
                 raise GitError(
-                    f"Git command failed: {' '.join(args)}",
+                    f"Git command failed ({' '.join(args)}): {detail}",
                     returncode=result.returncode,
-                    stderr=stderr_str
+                    stderr=stderr_str or stdout_str
                 )
             
             if stderr_str:
@@ -565,9 +581,18 @@ class GitWorktreeManager:
         Returns:
             Commit SHA
         """
-        # Stage all changes
-        await self._run_git(['add', '-A'], cwd=worktree_path)
-        
+        # Force-add so .gitignore'd files (e.g. dotfiles) are still committed
+        # when the user explicitly drafted a change for them.
+        await self._run_git(['add', '-A', '--force'], cwd=worktree_path)
+
+        # Verify there is something staged; otherwise `git commit` fails with
+        # "nothing to commit" on stdout and exit 1.
+        staged = await self._run_git(
+            ['diff', '--cached', '--name-only'], cwd=worktree_path
+        )
+        if not staged.strip():
+            raise EmptyCommitError()
+
         # Build commit command
         author = f"{author_name} <{author_email}>"
         commit_args = [
@@ -575,10 +600,10 @@ class GitWorktreeManager:
             f'--author={author}',
             '-m', message,
         ]
-        
+
         if description:
             commit_args.extend(['-m', description])
-        
+
         await self._run_git(commit_args, cwd=worktree_path)
         
         # Get commit SHA
@@ -596,23 +621,34 @@ class GitWorktreeManager:
         description: str = '',
     ) -> str:
         """Synchronous version of commit_changes."""
-        self._run_git_sync(['add', '-A'], cwd=worktree_path)
-        
+        # Force-add so .gitignore'd files (e.g. dotfiles like .content.json) are
+        # still committed when the user explicitly drafted a change for them.
+        self._run_git_sync(['add', '-A', '--force'], cwd=worktree_path)
+
+        # Verify there is something staged; otherwise `git commit` fails with
+        # "nothing to commit" written to stdout (not stderr) and exit 1, which
+        # surfaces to the UI as an opaque error.
+        staged = self._run_git_sync(
+            ['diff', '--cached', '--name-only'], cwd=worktree_path
+        )
+        if not staged.strip():
+            raise EmptyCommitError()
+
         author = f"{author_name} <{author_email}>"
         commit_args = [
             'commit',
             f'--author={author}',
             '-m', message,
         ]
-        
+
         if description:
             commit_args.extend(['-m', description])
-        
+
         self._run_git_sync(commit_args, cwd=worktree_path)
-        
+
         sha = self._run_git_sync(['rev-parse', 'HEAD'], cwd=worktree_path)
         logger.info(f"Created commit {sha[:8]} by {author}")
-        
+
         return sha
     
     async def push_branch(
@@ -636,6 +672,10 @@ class GitWorktreeManager:
         await self._run_git(push_args, cwd=worktree_path, timeout=60)
         logger.info(f"Pushed branch {branch_name}")
     
+    def head_sha_sync(self, worktree_path: str) -> str:
+        """Return the SHA of HEAD in the given worktree."""
+        return self._run_git_sync(['rev-parse', 'HEAD'], cwd=worktree_path)
+
     def push_branch_sync(
         self,
         worktree_path: str,
