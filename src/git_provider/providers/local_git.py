@@ -274,6 +274,95 @@ class LocalGitProvider(BaseGitProvider):
             }
         }
     
+    def get_file_blame(
+        self,
+        project_key: str,
+        repo_slug: str,
+        file_path: str,
+        branch: str = 'main',
+    ) -> List[Dict[str, Any]]:
+        """Run `git blame --line-porcelain` and parse it into per-line dicts.
+
+        Each line in the file becomes one dict. We use --line-porcelain (not
+        --porcelain) because it repeats author headers on every line, which
+        makes the parser straightforward — wiki files are small enough that
+        the size penalty is negligible.
+        """
+        repo_id = f"{project_key}_{repo_slug}"
+        repo_path = self._get_repo_path(repo_id)
+
+        try:
+            output = self._run_git_command(
+                repo_path,
+                ['blame', '--line-porcelain', branch, '--', file_path],
+            )
+        except subprocess.CalledProcessError as e:
+            raise ValueError(
+                f"Could not blame {file_path} in branch {branch}: {e.stderr}"
+            ) from e
+
+        return self._parse_blame_porcelain(output)
+
+    @staticmethod
+    def _parse_blame_porcelain(output: str) -> List[Dict[str, Any]]:
+        """Parse `git blame --line-porcelain` text into per-line dicts.
+
+        Exposed as a static helper so the wiki space view can reuse it on the
+        worktree-manager bare repo without instantiating LocalGitProvider
+        (which expects a `base_path` directory layout we don't have there).
+        """
+        from datetime import datetime, timezone
+
+        result: List[Dict[str, Any]] = []
+        # Parser state for the current "block" — git blame --line-porcelain
+        # emits one block per line: a header line "<sha> <orig> <final> <n>",
+        # then key/value lines, then a tab-prefixed content line.
+        current: Dict[str, Any] = {}
+        line_no = 0
+        for raw in output.split('\n'):
+            if not raw:
+                continue
+            if raw.startswith('\t'):
+                # Content of the line — closes the current block.
+                line_no += 1
+                content = raw[1:]
+                author_iso = ''
+                ts = current.get('author-time')
+                if ts:
+                    try:
+                        author_iso = datetime.fromtimestamp(
+                            int(ts), tz=timezone.utc
+                        ).isoformat()
+                    except (TypeError, ValueError):
+                        author_iso = ''
+                email = current.get('author-mail', '').strip('<>')
+                if email.lower().startswith('mailto:'):
+                    email = email[len('mailto:'):]
+                result.append({
+                    'line_no': line_no,
+                    'content': content,
+                    'commit_sha': current.get('sha', ''),
+                    'author_name': current.get('author', ''),
+                    'author_email': email,
+                    'author_date': author_iso,
+                    'summary': current.get('summary', ''),
+                })
+                current = {}
+                continue
+
+            parts = raw.split(' ', 3)
+            if len(parts) >= 3 and len(parts[0]) == 40 and all(
+                c in '0123456789abcdef' for c in parts[0]
+            ):
+                current = {'sha': parts[0]}
+                continue
+
+            key, _, value = raw.partition(' ')
+            if key:
+                current[key] = value
+
+        return result
+
     def get_file_content(self, project_key: str, repo_slug: str, file_path: str, branch: str = 'main') -> Dict[str, Any]:
         """
         Get content of a specific file.
@@ -353,7 +442,7 @@ class LocalGitProvider(BaseGitProvider):
         except subprocess.CalledProcessError as e:
             raise ValueError(f"Path not found: {path} in branch {branch}") from e
     
-    def list_pull_requests(self, repo_id: str, state: str = 'open', page: int = 1, per_page: int = 30) -> Dict[str, Any]:
+    def list_pull_requests(self, repo_id: str, state: str = 'open', page: int = 1, per_page: int = 30, reviewer: Optional[str] = None) -> Dict[str, Any]:
         """
         List pull requests - not supported for local repositories.
         """

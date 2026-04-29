@@ -526,17 +526,30 @@ class UserSpacePreferenceViewSet(viewsets.ViewSet):
         return Response(serializer.data)
     
     @extend_schema(
-        operation_id='preferences_favorites_add',
-        summary='Add to favorites',
-        description='Mark a space as favorite.',
+        operation_id='preferences_favorites_toggle',
+        summary='Add or remove a favorite',
+        description='POST to mark a space as favorite, DELETE to unmark.',
         parameters=[
             OpenApiParameter(name='space_slug', type=str, required=True, description='Space slug'),
         ],
-        responses={200: UserSpacePreferenceSerializer},
+        responses={200: UserSpacePreferenceSerializer, 204: None},
         tags=['preferences'],
     )
-    @action(detail=False, methods=['post'], url_path='favorites/(?P<space_slug>[^/]+)')
-    def add_favorite(self, request, space_slug=None):
+    @action(detail=False, methods=['post', 'delete'], url_path='favorites/(?P<space_slug>[^/]+)')
+    def toggle_favorite(self, request, space_slug=None):
+        if request.method == 'DELETE':
+            try:
+                preference = UserSpacePreference.objects.get(
+                    user=request.user,
+                    space__slug=space_slug
+                )
+                preference.is_favorite = False
+                preference.save()
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            except UserSpacePreference.DoesNotExist:
+                return Response(status=status.HTTP_204_NO_CONTENT)
+
+        # POST — add to favorites
         try:
             space = Space.objects.get(slug=space_slug)
         except Space.DoesNotExist:
@@ -554,29 +567,6 @@ class UserSpacePreferenceViewSet(viewsets.ViewSet):
         
         serializer = UserSpacePreferenceSerializer(preference)
         return Response(serializer.data)
-    
-    @extend_schema(
-        operation_id='preferences_favorites_remove',
-        summary='Remove from favorites',
-        description='Unmark a space as favorite.',
-        parameters=[
-            OpenApiParameter(name='space_slug', type=str, required=True, description='Space slug'),
-        ],
-        responses={204: None},
-        tags=['preferences'],
-    )
-    @action(detail=False, methods=['delete'], url_path='favorites/(?P<space_slug>[^/]+)')
-    def remove_favorite(self, request, space_slug=None):
-        try:
-            preference = UserSpacePreference.objects.get(
-                user=request.user,
-                space__slug=space_slug
-            )
-            preference.is_favorite = False
-            preference.save()
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        except UserSpacePreference.DoesNotExist:
-            return Response(status=status.HTTP_204_NO_CONTENT)
     
     @extend_schema(
         operation_id='preferences_recent_list',

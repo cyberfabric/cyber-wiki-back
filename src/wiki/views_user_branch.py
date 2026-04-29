@@ -32,6 +32,7 @@ from service_tokens.models import ServiceToken
 from users.models import APIResponseCache
 from users.permissions import IsEditorOrAbove
 from .models import Space, UserBranch, UserDraftChange
+from . import git_ops_log
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,91 @@ def _get_branch_files(branch: UserBranch, space: Space) -> list:
         return manager.list_changed_files_sync(rp, branch.branch_name, base_ref)
     except Exception:
         return []
+
+
+class PRCreationError(Exception):
+    """Raised by `_create_or_update_pr` when PR creation cannot proceed.
+
+    `status_code` lets the calling view translate the failure into an HTTP
+    status without re-deriving it from the message.
+    """
+
+    def __init__(self, message: str, *, status_code: int = 500) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _create_or_update_pr(
+    user,
+    space: Space,
+    branch: UserBranch,
+    *,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+) -> dict:
+    """Create a PR for `branch` and persist the resulting id/url on it.
+
+    Shared between the explicit `/user-branch/create-pr/` endpoint and the
+    auto-PR step inside `/draft-changes/commit/`. Idempotent: if the branch
+    already has a PR open, returns the cached id/url instead of creating a
+    second one.
+    """
+    if branch.pr_id and branch.pr_url:
+        return {'id': branch.pr_id, 'url': branch.pr_url}
+
+    if not space.edit_enabled:
+        raise PRCreationError('Edit fork not configured', status_code=400)
+    if not branch.last_commit_sha:
+        raise PRCreationError(
+            'No committed changes found. Commit changes first.',
+            status_code=400,
+        )
+
+    service_token = ServiceToken.objects.filter(
+        user=user, service_type=space.git_provider
+    ).first()
+    if not service_token:
+        raise PRCreationError(
+            f'No {space.git_provider} token found',
+            status_code=400,
+        )
+
+    provider = GitProviderFactory.create_from_service_token(service_token)
+    default_title = branch.name or f"Changes by {user.get_full_name() or user.username}"
+    pr_title = title or default_title
+    pr_description = description if description is not None else ''
+
+    try:
+        result = provider.create_pull_request(
+            from_project=space.edit_fork_project_key,
+            from_repo=space.edit_fork_repo_slug,
+            from_branch=branch.branch_name,
+            to_project=space.git_project_key,
+            to_repo=space.git_repository_id,
+            to_branch=branch.base_branch,
+            title=pr_title,
+            description=pr_description,
+        )
+    except Exception as e:
+        logger.error(f"[UserBranch] PR creation failed: {e}", exc_info=True)
+        raise PRCreationError(str(e), status_code=500) from e
+
+    branch.pr_id = result.get('id')
+    branch.pr_url = result.get('url')
+    branch.status = UserBranch.Status.PR_OPEN
+    branch.save(update_fields=['pr_id', 'pr_url', 'status'])
+    logger.info(f"[UserBranch] Created PR #{branch.pr_id} for task '{branch.name}'")
+
+    try:
+        deleted = APIResponseCache.objects.filter(
+            user=user, endpoint__contains='/pull-requests',
+        ).delete()[0]
+        if deleted:
+            logger.info(f"[UserBranch] Invalidated {deleted} PR cache entries")
+    except Exception as e:
+        logger.warning(f"[UserBranch] Failed to clear PR cache: {e}")
+
+    return result
 
 
 def _serialize_task(branch: UserBranch, files: list | None = None, draft_count: int = 0) -> dict:
@@ -376,60 +462,42 @@ class UserBranchViewSet(ViewSet):
 
         space = get_object_or_404(Space, id=space_id)
 
-        if not space.edit_enabled:
-            return Response({'error': 'Edit fork not configured'}, status=status.HTTP_400_BAD_REQUEST)
-
         branch = _get_branch_for_action(request, space)
-        if not branch or not branch.last_commit_sha:
+        if not branch:
             return Response(
-                {'error': 'No committed changes found. Commit changes first.'},
+                {'error': 'No active task branch found'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        service_token = ServiceToken.objects.filter(
-            user=request.user, service_type=space.git_provider
-        ).first()
-        if not service_token:
-            return Response(
-                {'error': f'No {space.git_provider} token found'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        provider = GitProviderFactory.create_from_service_token(service_token)
-        default_title = branch.name or f"Changes by {request.user.get_full_name() or request.user.username}"
-        title = request.data.get('title') or default_title
-        description = request.data.get('description', '')
-
         try:
-            result = provider.create_pull_request(
-                from_project=space.edit_fork_project_key,
-                from_repo=space.edit_fork_repo_slug,
-                from_branch=branch.branch_name,
-                to_project=space.git_project_key,
-                to_repo=space.git_repository_id,
-                to_branch=branch.base_branch,
-                title=title,
-                description=description,
+            _create_or_update_pr(
+                request.user,
+                space,
+                branch,
+                title=request.data.get('title'),
+                description=request.data.get('description'),
             )
-        except Exception as e:
-            logger.error(f"[UserBranch] create_pr failed: {e}", exc_info=True)
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except PRCreationError as e:
+            git_ops_log.record(
+                request.user.id,
+                kind='pr.create.manual',
+                status='error',
+                message=str(e),
+                space_slug=space.slug,
+                branch_name=branch.branch_name,
+                payload={'http_status': e.status_code},
+            )
+            return Response({'error': str(e)}, status=e.status_code)
 
-        branch.pr_id = result.get('id')
-        branch.pr_url = result.get('url')
-        branch.status = UserBranch.Status.PR_OPEN
-        branch.save(update_fields=['pr_id', 'pr_url', 'status'])
-        logger.info(f"[UserBranch] Created PR #{branch.pr_id} for task '{branch.name}'")
-
-        try:
-            deleted = APIResponseCache.objects.filter(
-                user=request.user, endpoint__contains='/pull-requests',
-            ).delete()[0]
-            if deleted:
-                logger.info(f"[UserBranch] Invalidated {deleted} PR cache entries")
-        except Exception as e:
-            logger.warning(f"[UserBranch] Failed to clear PR cache: {e}")
-
+        git_ops_log.record(
+            request.user.id,
+            kind='pr.create.manual',
+            status='ok',
+            message=f"PR #{branch.pr_id} opened for {branch.branch_name}",
+            space_slug=space.slug,
+            branch_name=branch.branch_name,
+            payload={'pr_id': branch.pr_id, 'pr_url': branch.pr_url},
+        )
         return Response({'pr_id': branch.pr_id, 'pr_url': branch.pr_url, 'branch_name': branch.branch_name})
 
     # ── Discard ────────────────────────────────────────────────────────────────

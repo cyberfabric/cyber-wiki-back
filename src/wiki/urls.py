@@ -11,6 +11,8 @@ from .views_links import DocumentLinkViewSet
 from .views_file_mapping import FileMappingViewSet
 from .views_draft_changes import DraftChangeViewSet
 from .views_user_branch import UserBranchViewSet
+from .views_git_ops_log import GitOpsLogViewSet
+from .views_my_reviews import my_reviews
 
 router = DefaultRouter()
 
@@ -31,10 +33,14 @@ router.register(r'draft-changes', DraftChangeViewSet, basename='draft-change')
 # User branch management (commit, PR, discard, unstage, rebase)
 router.register(r'user-branch', UserBranchViewSet, basename='user-branch')
 
+# Git operations debug log (per-user ring-buffer; Debug panel only)
+router.register(r'git-ops-log', GitOpsLogViewSet, basename='git-ops-log')
+
 # Nested routes for file mappings under spaces
 file_mapping_router = DefaultRouter()
 file_mapping_router.register(r'file-mappings', FileMappingViewSet, basename='file-mapping')
 
 urlpatterns = router.urls + [
     path('spaces/<slug:space_slug>/', include(file_mapping_router.urls)),
+    path('my-reviews/', my_reviews, name='my-reviews'),
 ]

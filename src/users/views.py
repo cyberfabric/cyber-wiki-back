@@ -58,7 +58,7 @@ class ApiTokenViewSet(viewsets.ModelViewSet):
     serializer_class = ApiTokenSerializer
     
     def get_queryset(self):
-        return ApiToken.objects.filter(user=self.request.user)
+        return ApiToken.objects.filter(user=self.request.user).exclude(name='web_session')
     
     @extend_schema(
         operation_id='user_management_tokens_list',

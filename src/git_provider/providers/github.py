@@ -110,17 +110,35 @@ class GitHubProvider(BaseGitProvider):
             else:
                 return [self._normalize_tree_entry(contents)]
     
-    def list_pull_requests(self, repo_id: str, state: str = 'open', page: int = 1, per_page: int = 30) -> Dict[str, Any]:
-        """List pull requests."""
+    def list_pull_requests(self, repo_id: str, state: str = 'open', page: int = 1, per_page: int = 30, reviewer: Optional[str] = None) -> Dict[str, Any]:
+        """List pull requests.
+
+        ``reviewer`` filtering is applied **client-side over the current page only**.
+        GitHub's `/repos/.../pulls` endpoint has no native reviewer filter, and
+        ``requested_reviewers`` only lists reviewers who have not yet submitted a
+        review (after approve/request-changes the reviewer is removed from that
+        array). For an authoritative cross-page listing of "PRs awaiting my
+        review", callers should use the search API
+        (``/search/issues?q=is:pr+is:open+review-requested:<user>``) instead.
+        """
         response = self._request('GET', f'/repos/{repo_id}/pulls', params={
             'state': state if state != 'merged' else 'closed',
             'page': page,
             'per_page': per_page,
         })
-        
+
         prs = response.json()
+        normalized = [self._normalize_pr(pr) for pr in prs]
+
+        if reviewer:
+            reviewer_lower = reviewer.lower()
+            normalized = [
+                pr for pr in normalized
+                if any(r['username'].lower() == reviewer_lower for r in pr.get('reviewers', []))
+            ]
+
         return {
-            'pull_requests': [self._normalize_pr(pr) for pr in prs],
+            'pull_requests': normalized,
             'page': page,
             'per_page': per_page,
         }
@@ -189,6 +207,15 @@ class GitHubProvider(BaseGitProvider):
     
     def _normalize_pr(self, pr: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize pull request data."""
+        reviewers = []
+        for r in pr.get('requested_reviewers', []):
+            reviewers.append({
+                'username': r.get('login', ''),
+                'display_name': r.get('login', ''),
+                'avatar_url': r.get('avatar_url', ''),
+                'role': 'REVIEWER',
+                'status': 'UNAPPROVED',
+            })
         return {
             'number': pr.get('number', 0),
             'title': pr.get('title', ''),
@@ -198,6 +225,7 @@ class GitHubProvider(BaseGitProvider):
             'updated_at': pr.get('updated_at', ''),
             'merged': pr.get('merged', False),
             'url': pr.get('html_url', ''),
+            'reviewers': reviewers,
         }
     
     def _normalize_commit(self, commit: Dict[str, Any]) -> Dict[str, Any]:

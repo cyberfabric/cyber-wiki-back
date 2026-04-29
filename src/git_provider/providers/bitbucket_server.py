@@ -248,7 +248,15 @@ class BitbucketServerProvider(BaseGitProvider):
             'at': branch,
         })
         
-        data = response.json()
+        # Decode response body as UTF-8 to avoid mojibake from the
+        # requests library defaulting to ISO-8859-1 when no charset is
+        # declared.  CachedResponse objects (from the caching layer) have
+        # no `.content` attribute, so fall back to `.json()`.
+        if hasattr(response, 'content'):
+            import json as _json
+            data = _json.loads(response.content.decode('utf-8'))
+        else:
+            data = response.json()
         lines = data.get('lines', [])
         content = '\n'.join([line.get('text', '') for line in lines])
         
@@ -337,7 +345,7 @@ class BitbucketServerProvider(BaseGitProvider):
         
         return results
     
-    def list_pull_requests(self, repo_id: str, state: str = 'open', page: int = 1, per_page: int = 30) -> Dict[str, Any]:
+    def list_pull_requests(self, repo_id: str, state: str = 'open', page: int = 1, per_page: int = 30, reviewer: Optional[str] = None) -> Dict[str, Any]:
         """List pull requests."""
         project_key, repo_slug = repo_id.split('_', 1)
         start = (page - 1) * per_page
@@ -350,11 +358,16 @@ class BitbucketServerProvider(BaseGitProvider):
             'all': 'ALL',
         }.get(state.lower(), 'OPEN')
         
-        response = self._request('GET', f'/projects/{project_key}/repos/{repo_slug}/pull-requests', params={
+        params = {
             'state': bb_state,
             'start': start,
             'limit': per_page,
-        })
+        }
+        if reviewer:
+            params['role.1'] = 'REVIEWER'
+            params['username.1'] = reviewer
+        
+        response = self._request('GET', f'/projects/{project_key}/repos/{repo_slug}/pull-requests', params=params)
         
         data = response.json()
         prs = data.get('values', [])
@@ -588,6 +601,17 @@ class BitbucketServerProvider(BaseGitProvider):
         author = pr.get('author', {}).get('user', {})
         links = pr.get('links', {})
         
+        reviewers = []
+        for r in pr.get('reviewers', []):
+            user = r.get('user', {})
+            reviewers.append({
+                'username': user.get('slug', '') or user.get('name', ''),
+                'display_name': user.get('displayName', ''),
+                'avatar_url': '',
+                'role': r.get('role', 'REVIEWER'),
+                'status': r.get('status', 'UNAPPROVED'),
+            })
+        
         return {
             'number': pr.get('id', 0),
             'title': pr.get('title', ''),
@@ -598,6 +622,7 @@ class BitbucketServerProvider(BaseGitProvider):
             'merged': pr.get('state') == 'MERGED',
             'url': links.get('self', [{}])[0].get('href', ''),
             'from_branch': pr.get('fromRef', {}).get('displayId', ''),
+            'reviewers': reviewers,
         }
     
     def _normalize_commit(self, commit: Dict[str, Any]) -> Dict[str, Any]:
