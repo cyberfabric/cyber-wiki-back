@@ -14,7 +14,12 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
 from .models import Space, UserDraftChange, UserBranch
-from .views_user_branch import _derive_upstream_ssh_url
+from . import git_ops_log
+from .views_user_branch import (
+    _derive_upstream_ssh_url,
+    _create_or_update_pr,
+    PRCreationError,
+)
 from users.permissions import IsEditorOrAbove
 from git_provider.worktree_manager import (
     GitWorktreeManager, GitError, RebaseConflictError, EmptyCommitError,
@@ -403,6 +408,11 @@ class DraftChangeViewSet(viewsets.ViewSet):
                     f"[DraftChange] No-op commit for {request.user.username} "
                     f"in {space.slug}: drafts already match HEAD ({head_sha[:8]})"
                 )
+                pr_payload_noop = (
+                    {'pr_id': user_branch.pr_id, 'pr_url': user_branch.pr_url}
+                    if user_branch.pr_id and user_branch.pr_url
+                    else None
+                )
                 return Response({
                     'success': True,
                     'commit_sha': head_sha,
@@ -412,6 +422,9 @@ class DraftChangeViewSet(viewsets.ViewSet):
                     'space_id': str(space.id),
                     'space_slug': space.slug,
                     'noop': True,
+                    'pr': pr_payload_noop,
+                    'pr_error': None,
+                    'pr_status': 'existing' if pr_payload_noop else 'not_attempted',
                 })
 
             # 6. Push to fork
@@ -434,6 +447,83 @@ class DraftChangeViewSet(viewsets.ViewSet):
                 f"[DraftChange] Committed {deleted_count} changes for "
                 f"{request.user.username} in {space.slug}: {commit_sha[:8]}"
             )
+            git_ops_log.record(
+                request.user.id,
+                kind='commit',
+                status='ok',
+                message=f"{deleted_count} file(s) committed: {commit_message[:80]}",
+                space_slug=space.slug,
+                branch_name=user_branch.branch_name,
+                payload={
+                    'commit_sha': commit_sha,
+                    'files_committed': deleted_count,
+                    'base_branch': user_branch.base_branch,
+                },
+            )
+
+            # 9. Auto-create PR for branches that don't have one yet. The push
+            #    in step 6 already produced a remote head. We always return a
+            #    `pr_status` enum so the frontend can show a clear banner:
+            #    `created`     — PR newly opened on this commit,
+            #    `existing`    — branch already had a PR (push updates it),
+            #    `failed`      — attempt failed mid-flight,
+            #    `not_attempted` — prerequisites missing (no edit fork / token).
+            had_pr_before = bool(user_branch.pr_id)
+            pr_payload = None
+            pr_error = None
+            pr_status = 'existing' if had_pr_before else 'not_attempted'
+            if not had_pr_before:
+                try:
+                    _create_or_update_pr(request.user, space, user_branch)
+                    pr_status = 'created'
+                except PRCreationError as e:
+                    pr_error = str(e)
+                    pr_status = 'failed'
+                    logger.warning(
+                        f"[DraftChange] auto-PR creation skipped for "
+                        f"{user_branch.branch_name}: {e}"
+                    )
+                    git_ops_log.record(
+                        request.user.id,
+                        kind='pr.create.auto',
+                        status='error',
+                        message=str(e),
+                        space_slug=space.slug,
+                        branch_name=user_branch.branch_name,
+                        payload={'http_status': e.status_code},
+                    )
+            if user_branch.pr_id and user_branch.pr_url:
+                pr_payload = {'pr_id': user_branch.pr_id, 'pr_url': user_branch.pr_url}
+                if pr_status == 'created':
+                    git_ops_log.record(
+                        request.user.id,
+                        kind='pr.create.auto',
+                        status='ok',
+                        message=f"PR #{user_branch.pr_id} opened for {user_branch.branch_name}",
+                        space_slug=space.slug,
+                        branch_name=user_branch.branch_name,
+                        payload={
+                            'pr_id': user_branch.pr_id,
+                            'pr_url': user_branch.pr_url,
+                        },
+                    )
+                elif pr_status == 'existing':
+                    git_ops_log.record(
+                        request.user.id,
+                        kind='pr.update.push',
+                        status='ok',
+                        message=(
+                            f"Pushed new commit to existing PR #{user_branch.pr_id}"
+                        ),
+                        space_slug=space.slug,
+                        branch_name=user_branch.branch_name,
+                        payload={
+                            'pr_id': user_branch.pr_id,
+                            'pr_url': user_branch.pr_url,
+                            'commit_sha': commit_sha,
+                        },
+                    )
+
             return Response({
                 'success': True,
                 'commit_sha': commit_sha,
@@ -441,21 +531,46 @@ class DraftChangeViewSet(viewsets.ViewSet):
                 'files_committed': deleted_count,
                 'space_id': str(space.id),
                 'space_slug': space.slug,
+                'pr': pr_payload,
+                'pr_error': pr_error,
+                'pr_status': pr_status,
             })
 
         except RebaseConflictError as exc:
+            git_ops_log.record(
+                request.user.id,
+                kind='commit',
+                status='error',
+                message=f"Rebase conflict: {len(exc.conflicting_files)} file(s)",
+                space_slug=space.slug,
+                payload={'conflict_files': exc.conflicting_files},
+            )
             return Response(
                 {'error': 'rebase_conflict', 'conflict_files': exc.conflicting_files},
                 status=status.HTTP_409_CONFLICT,
             )
         except GitError as e:
             logger.error(f"[DraftChange] Git error: {e.message}", exc_info=True)
+            git_ops_log.record(
+                request.user.id,
+                kind='commit',
+                status='error',
+                message=f"Git error: {e.message}",
+                space_slug=space.slug,
+            )
             return Response(
                 {'error': f'Git operation failed: {e.message}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         except Exception as e:
             logger.error(f"[DraftChange] Unexpected error: {e}", exc_info=True)
+            git_ops_log.record(
+                request.user.id,
+                kind='commit',
+                status='error',
+                message=f"Unexpected error: {str(e)[:200]}",
+                space_slug=space.slug,
+            )
             return Response(
                 {'error': f'Commit failed: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

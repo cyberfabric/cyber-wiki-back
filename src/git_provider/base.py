@@ -97,17 +97,45 @@ class BaseGitProvider(ABC):
     def get_file_content(self, project_key: str, repo_slug: str, file_path: str, branch: str = 'main') -> Dict[str, Any]:
         """
         Get content of a specific file.
-        
+
         Args:
             project_key: Project key (for Bitbucket) or owner (for GitHub)
             repo_slug: Repository slug/name
             file_path: Path to the file within the repository
             branch: Branch name (default: 'main')
-        
+
         Returns:
             Dict with 'content', 'encoding', 'sha', etc.
         """
         pass
+
+    def get_file_blame(
+        self,
+        project_key: str,
+        repo_slug: str,
+        file_path: str,
+        branch: str = 'main',
+    ) -> List[Dict[str, Any]]:
+        """Per-line blame for `file_path` at `branch`.
+
+        Optional capability — only providers with direct git access (LocalGit,
+        worktree-backed setups) override this. Remote-only providers return
+        an empty list and the caller surfaces a friendly "blame not supported
+        for this provider" message.
+
+        Returns a list of dicts, one per line, in source order:
+          {
+            'line_no':       1-based line number in the current file,
+            'content':       text of the line (no trailing newline),
+            'commit_sha':    abbreviated/long sha of the commit that
+                              introduced this version of the line,
+            'author_name':   author display name,
+            'author_email':  author email (best-effort),
+            'author_date':   ISO-8601 timestamp,
+            'summary':       commit message subject (single line),
+          }
+        """
+        return []
     
     @abstractmethod
     def get_directory_tree(self, project_key: str, repo_slug: str, path: str = '', branch: str = 'main', recursive: bool = False) -> List[Dict[str, Any]]:

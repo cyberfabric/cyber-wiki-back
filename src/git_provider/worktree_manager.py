@@ -245,48 +245,85 @@ class GitWorktreeManager:
         bare_path = self.get_bare_repo_path(space_id)
         
         if not os.path.exists(bare_path):
-            # First time: clone as bare mirror
+            # First time: bare clone (NOT mirror — mirror sets
+            # `remote.origin.mirror = true`, which makes `git push origin
+            # <branch>` fail with "fatal: --mirror can't be combined with
+            # refspecs". We only need a bare repo to host worktrees.)
             logger.info(f"Cloning bare repo for space {space_id}")
             os.makedirs(os.path.dirname(bare_path), exist_ok=True)
-            
+
             await self._run_git([
-                'clone', '--bare', '--mirror',
+                'clone', '--bare',
                 ssh_url,
                 bare_path
             ])
             logger.info(f"Bare repo cloned to {bare_path}")
         else:
-            # Update existing bare repo
+            # Update existing bare repo. Older deployments cloned with
+            # --mirror; unset the leftover config so push-with-refspec works.
+            await self._unset_mirror_config(bare_path)
             logger.info(f"Fetching updates for space {space_id}")
             await self._run_git(
                 ['fetch', '--all', '--prune'],
                 cwd=bare_path
             )
-        
+
         return bare_path
-    
+
     def ensure_bare_repo_sync(self, space_id: str, ssh_url: str) -> str:
         """Synchronous version of ensure_bare_repo."""
         bare_path = self.get_bare_repo_path(space_id)
-        
+
         if not os.path.exists(bare_path):
             logger.info(f"Cloning bare repo for space {space_id}")
             os.makedirs(os.path.dirname(bare_path), exist_ok=True)
-            
+
             self._run_git_sync([
-                'clone', '--bare', '--mirror',
+                'clone', '--bare',
                 ssh_url,
                 bare_path
             ])
             logger.info(f"Bare repo cloned to {bare_path}")
         else:
+            self._unset_mirror_config_sync(bare_path)
             logger.info(f"Fetching updates for space {space_id}")
             self._run_git_sync(
                 ['fetch', '--all', '--prune'],
                 cwd=bare_path
             )
-        
+
         return bare_path
+
+    async def _unset_mirror_config(self, bare_path: str) -> None:
+        """Strip `remote.origin.mirror = true` from a pre-existing bare clone.
+
+        Older deployments cloned with `--bare --mirror`, which makes any later
+        `git push origin <branch>` fail because mirror pushes don't accept
+        refspecs. Run as a probe — failure means the config wasn't set,
+        which is the desired state.
+        """
+        try:
+            await self._run_git(
+                ['config', '--unset', 'remote.origin.mirror'],
+                cwd=bare_path,
+                quiet=True,
+            )
+            logger.info(f"Unset stale remote.origin.mirror in {bare_path}")
+        except GitError:
+            # Exit code 5 = key wasn't there. Nothing to do.
+            pass
+
+    def _unset_mirror_config_sync(self, bare_path: str) -> None:
+        """Synchronous version of `_unset_mirror_config`."""
+        try:
+            self._run_git_sync(
+                ['config', '--unset', 'remote.origin.mirror'],
+                cwd=bare_path,
+                quiet=True,
+            )
+            logger.info(f"Unset stale remote.origin.mirror in {bare_path}")
+        except GitError:
+            pass
     
     async def create_worktree(
         self,
@@ -665,13 +702,21 @@ class GitWorktreeManager:
             branch_name: Branch name to push
             force: Force push (for amending commits)
         """
-        push_args = ['push', 'origin', branch_name]
+        # `-c remote.origin.mirror=false` is a belt-and-suspenders safety net
+        # for bare clones that were originally cloned with --mirror. Without
+        # it git aborts with "fatal: --mirror can't be combined with refspecs".
+        # The new clone path no longer sets that config, but the override
+        # makes us robust against any leftover deployment.
+        push_args = [
+            '-c', 'remote.origin.mirror=false',
+            'push', 'origin', branch_name,
+        ]
         if force:
-            push_args.insert(1, '--force')
-        
+            push_args.insert(3, '--force')
+
         await self._run_git(push_args, cwd=worktree_path, timeout=60)
         logger.info(f"Pushed branch {branch_name}")
-    
+
     def head_sha_sync(self, worktree_path: str) -> str:
         """Return the SHA of HEAD in the given worktree."""
         return self._run_git_sync(['rev-parse', 'HEAD'], cwd=worktree_path)
@@ -683,10 +728,13 @@ class GitWorktreeManager:
         force: bool = False,
     ) -> None:
         """Synchronous version of push_branch."""
-        push_args = ['push', 'origin', branch_name]
+        push_args = [
+            '-c', 'remote.origin.mirror=false',
+            'push', 'origin', branch_name,
+        ]
         if force:
-            push_args.insert(1, '--force')
-        
+            push_args.insert(3, '--force')
+
         self._run_git_sync(push_args, cwd=worktree_path, timeout=60)
         logger.info(f"Pushed branch {branch_name}")
     
@@ -755,13 +803,14 @@ class GitWorktreeManager:
         if os.path.exists(bare_path):
             try:
                 await self._run_git(
-                    ['push', 'origin', '--delete', branch_name],
+                    ['-c', 'remote.origin.mirror=false',
+                     'push', 'origin', '--delete', branch_name],
                     cwd=bare_path
                 )
                 logger.info(f"Deleted remote branch {branch_name}")
             except GitError as e:
                 logger.warning(f"Failed to delete remote branch {branch_name}: {e}")
-    
+
     def delete_remote_branch_sync(
         self,
         space_id: str,
@@ -769,11 +818,12 @@ class GitWorktreeManager:
     ) -> None:
         """Synchronous version of delete_remote_branch."""
         bare_path = self.get_bare_repo_path(space_id)
-        
+
         if os.path.exists(bare_path):
             try:
                 self._run_git_sync(
-                    ['push', 'origin', '--delete', branch_name],
+                    ['-c', 'remote.origin.mirror=false',
+                     'push', 'origin', '--delete', branch_name],
                     cwd=bare_path
                 )
                 logger.info(f"Deleted remote branch {branch_name}")
@@ -935,19 +985,22 @@ class GitWorktreeManager:
 
     def _resolve_base_ref(self, worktree_or_repo_path: str, base_branch: str) -> str:
         """
-        Return upstream/{base_branch} if an upstream remote is configured, else origin/{base_branch}.
-        This ensures user branches are always measured against the canonical upstream, not a
-        potentially stale fork master.
+        Return upstream/{base_branch} if an upstream remote is configured,
+        else origin/{base_branch}, else the bare branch name (for local repos
+        that have no remote tracking branches).
         """
-        try:
-            self._run_git_sync(
-                ['rev-parse', '--verify', f'upstream/{base_branch}'],
-                cwd=worktree_or_repo_path,
-                quiet=True,
-            )
-            return f'upstream/{base_branch}'
-        except GitError:
-            return f'origin/{base_branch}'
+        for prefix in ('upstream', 'origin'):
+            ref = f'{prefix}/{base_branch}'
+            try:
+                self._run_git_sync(
+                    ['rev-parse', '--verify', ref],
+                    cwd=worktree_or_repo_path,
+                    quiet=True,
+                )
+                return ref
+            except GitError:
+                continue
+        return base_branch
 
     def rebase_onto_base_sync(self, worktree_path: str, base_branch: str, prefer_upstream: bool = False) -> None:
         """
@@ -993,16 +1046,14 @@ class GitWorktreeManager:
 
     def soft_reset_to_base_sync(self, worktree_path: str, base_branch: str) -> List[str]:
         """
-        Soft-reset the branch to origin/{base_branch}, keeping all file changes in the
-        working tree.  We deliberately use origin/ (fork master) here, not upstream, so
-        that only commits added ON TOP OF the fork master are surfaced as changed files.
-        Using upstream would also surface any fork-master divergence commits that the user
-        didn't author, polluting the resulting draft changes.
+        Soft-reset the branch to the resolved base ref, keeping all file changes
+        in the working tree.  Uses _resolve_base_ref so that local repos (no
+        origin remote) fall back to the bare branch name.
 
         Returns:
             List of file paths that were changed (and are now unstaged).
         """
-        base_ref = f'origin/{base_branch}'
+        base_ref = self._resolve_base_ref(worktree_path, base_branch)
         changed = self.list_changed_files_sync(
             worktree_path,
             branch_name='HEAD',
@@ -1016,8 +1067,8 @@ class GitWorktreeManager:
         return changed
 
     def hard_reset_to_base_sync(self, worktree_path: str, base_branch: str) -> None:
-        """Hard-reset the branch to origin/{base_branch}, discarding all commits."""
-        base_ref = f'origin/{base_branch}'
+        """Hard-reset the branch to the resolved base ref, discarding all commits."""
+        base_ref = self._resolve_base_ref(worktree_path, base_branch)
         self._run_git_sync(
             ['reset', '--hard', base_ref],
             cwd=worktree_path,
