@@ -385,6 +385,32 @@ class BitbucketServerProvider(BaseGitProvider):
         response = self._request('GET', f'/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_number}')
         return self._normalize_pr(response.json())
     
+    def get_pr_comment_authors(self, repo_id: str, pr_number: int) -> List[str]:
+        """Return author usernames for all comments on a Bitbucket Server PR."""
+        project_key, repo_slug = repo_id.split('_', 1)
+        authors: List[str] = []
+        start = 0
+        while True:
+            try:
+                resp = self._request(
+                    'GET',
+                    f'/projects/{project_key}/repos/{repo_slug}/pull-requests/{pr_number}/activities',
+                    params={'start': start, 'limit': 500},
+                )
+                data = resp.json()
+            except Exception:
+                break
+            for activity in data.get('values', []):
+                if activity.get('action') in ('COMMENTED', 'REVIEWED'):
+                    user = activity.get('user') or activity.get('comment', {}).get('author', {})
+                    slug = user.get('slug') or user.get('name', '')
+                    if slug:
+                        authors.append(slug)
+            if data.get('isLastPage', True):
+                break
+            start = data.get('nextPageStart', start + 500)
+        return authors
+
     def get_pull_request_files(self, repo_id: str, pr_number: int) -> List[str]:
         """Get list of files changed in a pull request with pagination support."""
         import logging

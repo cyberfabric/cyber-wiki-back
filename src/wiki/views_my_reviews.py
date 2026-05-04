@@ -133,6 +133,10 @@ def my_reviews(request):
 
     server_reviewer = reviewer_filter if reviewer_filter else None
 
+    def _is_bot(username, prefixes):
+        lower = username.lower()
+        return any(lower.startswith(p.lower()) for p in prefixes)
+
     def _fetch(space, provider, repo_id):
         """Fetch PRs for one space; return list of result dicts (filtered)."""
         try:
@@ -147,10 +151,37 @@ def my_reviews(request):
             logger.warning('Failed to fetch PRs for space %s', space.slug, exc_info=True)
             return []
 
+        prs = prs_data.get('pull_requests', [])
+        bot_prefixes = space.bot_usernames or []
+
+        # If the space has bot prefixes configured, enrich PRs that have
+        # comments with separate bot/human counts (fetched in parallel).
+        if bot_prefixes:
+            prs_with_comments = [pr for pr in prs if pr.get('comment_count', 0) > 0]
+            if prs_with_comments:
+                def _count_for_pr(pr):
+                    try:
+                        authors = provider.get_pr_comment_authors(repo_id, pr['number'])
+                    except Exception:
+                        authors = []
+                    bot = sum(1 for a in authors if _is_bot(a, bot_prefixes))
+                    return pr['number'], len(authors) - bot, bot
+
+                max_w = min(8, len(prs_with_comments))
+                with ThreadPoolExecutor(max_workers=max_w) as pool:
+                    futs = {pool.submit(_count_for_pr, pr): pr for pr in prs_with_comments}
+                    counts = {}
+                    for fut in as_completed(futs):
+                        pr_num, human, bot = fut.result()
+                        counts[pr_num] = (human, bot)
+                for pr in prs:
+                    if pr['number'] in counts:
+                        human, bot = counts[pr['number']]
+                        pr['human_comment_count'] = human
+                        pr['bot_comment_count'] = bot
+
         out = []
-        for pr in prs_data.get('pull_requests', []):
-            # Client-side reviewer filter (server filter is best-effort on
-            # GitHub — see provider docstring).
+        for pr in prs:
             if reviewer_filter and not any(
                 r.get('username', '').lower() == reviewer_filter
                 for r in pr.get('reviewers', [])
@@ -181,7 +212,19 @@ def my_reviews(request):
         cached[1] for cached in provider_cache.values() if cached is not None
     })
 
+    # Collect bot username prefixes from all spaces so the frontend can
+    # exclude them from reviewer filters and separate bot comments.
+    bot_usernames_by_space = {}
+    all_bot_usernames = set()
+    for space in spaces:
+        prefixes = space.bot_usernames or []
+        if prefixes:
+            bot_usernames_by_space[space.slug] = prefixes
+            all_bot_usernames.update(prefixes)
+
     return Response({
         'pull_requests': result,
         'current_git_usernames': git_usernames,
+        'bot_usernames': sorted(all_bot_usernames),
+        'bot_usernames_by_space': bot_usernames_by_space,
     }, status=status.HTTP_200_OK)

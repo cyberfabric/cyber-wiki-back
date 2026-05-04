@@ -130,6 +130,25 @@ class GitHubProvider(BaseGitProvider):
         prs = response.json()
         normalized = [self._normalize_pr(pr) for pr in prs]
 
+        # The /pulls list endpoint doesn't populate comment counts.
+        # Enrich from /issues which returns PRs with a `comments` field.
+        if normalized:
+            try:
+                issues_resp = self._request('GET', f'/repos/{repo_id}/issues', params={
+                    'state': state if state != 'merged' else 'closed',
+                    'per_page': per_page,
+                    'page': page,
+                })
+                comment_map = {
+                    issue['number']: issue.get('comments', 0)
+                    for issue in issues_resp.json()
+                    if 'pull_request' in issue
+                }
+                for pr in normalized:
+                    pr['comment_count'] = comment_map.get(pr['number'], pr.get('comment_count', 0))
+            except Exception:
+                pass  # Non-critical — keep whatever _normalize_pr produced
+
         if reviewer:
             reviewer_lower = reviewer.lower()
             normalized = [
@@ -161,6 +180,29 @@ class GitHubProvider(BaseGitProvider):
         diff_response.raise_for_status()
         return diff_response.text
     
+    def get_pr_comment_authors(self, repo_id: str, pr_number: int) -> List[str]:
+        """Return author usernames for all comments on a GitHub PR."""
+        authors: List[str] = []
+        # Issue comments (conversation-level)
+        try:
+            resp = self._request('GET', f'/repos/{repo_id}/issues/{pr_number}/comments', params={'per_page': 100})
+            for c in resp.json():
+                login = (c.get('user') or {}).get('login', '')
+                if login:
+                    authors.append(login)
+        except Exception:
+            pass
+        # Review comments (inline on diff)
+        try:
+            resp = self._request('GET', f'/repos/{repo_id}/pulls/{pr_number}/comments', params={'per_page': 100})
+            for c in resp.json():
+                login = (c.get('user') or {}).get('login', '')
+                if login:
+                    authors.append(login)
+        except Exception:
+            pass
+        return authors
+
     def list_commits(self, repo_id: str, branch: str = 'main', page: int = 1, per_page: int = 30) -> Dict[str, Any]:
         """List commits."""
         response = self._request('GET', f'/repos/{repo_id}/commits', params={

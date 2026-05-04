@@ -514,6 +514,17 @@ def stream_enrichments(request):
     Auth: session cookie (same as all other API endpoints).
     nginx / gunicorn buffering is disabled via X-Accel-Buffering header.
     """
+    # Plain Django view — manually support Bearer token auth in addition to
+    # session auth, since DRF's authentication classes don't run here.
+    if not request.user.is_authenticated:
+        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+        if auth_header.startswith('Bearer '):
+            from users.models import ApiToken
+            try:
+                api_token = ApiToken.objects.select_related('user').get(token=auth_header[7:])
+                request.user = api_token.user
+            except ApiToken.DoesNotExist:
+                pass
     if not request.user.is_authenticated:
         from django.http import HttpResponse
         return HttpResponse('Authentication required', status=401)

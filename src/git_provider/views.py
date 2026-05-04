@@ -75,16 +75,29 @@ class GitProviderViewSet(viewsets.ViewSet):
     # Note: Git credentials are now managed via /api/service-tokens/v1/tokens/
     # This ViewSet only handles repository operations using those credentials
     
+    # SaaS providers where there's only one instance (no self-hosted URL
+    # distinction), so base_url filtering may cause false negatives.
+    _SAAS_PROVIDERS = {'github'}
+
     def _get_provider(self, request):
         """Get Git provider instance for the user."""
         provider_type = request.query_params.get('provider')
         base_url = request.query_params.get('base_url')
 
-        if not provider_type or not base_url:
+        if not provider_type:
+            raise ValueError('provider is required')
+
+        # For SaaS providers, base_url is optional (there's only one instance).
+        if not base_url and provider_type not in self._SAAS_PROVIDERS:
             raise ValueError('provider and base_url are required')
 
         try:
-            service_token = ServiceToken.objects.get(user=request.user, service_type=provider_type, base_url=base_url)
+            qs = ServiceToken.objects.filter(user=request.user, service_type=provider_type)
+            if base_url and provider_type not in self._SAAS_PROVIDERS:
+                qs = qs.filter(base_url=base_url)
+            service_token = qs.first()
+            if not service_token:
+                raise ServiceToken.DoesNotExist
             return GitProviderFactory.create_from_service_token(service_token)
         except ServiceToken.DoesNotExist:
             raise ValueError('Git credentials not found')
