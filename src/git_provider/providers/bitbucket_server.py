@@ -612,6 +612,9 @@ class BitbucketServerProvider(BaseGitProvider):
                 'status': r.get('status', 'UNAPPROVED'),
             })
         
+        properties = pr.get('properties') or {}
+        comment_count = properties.get('commentCount', 0)
+
         return {
             'number': pr.get('id', 0),
             'title': pr.get('title', ''),
@@ -623,6 +626,7 @@ class BitbucketServerProvider(BaseGitProvider):
             'url': links.get('self', [{}])[0].get('href', ''),
             'from_branch': pr.get('fromRef', {}).get('displayId', ''),
             'reviewers': reviewers,
+            'comment_count': comment_count,
         }
     
     def _normalize_commit(self, commit: Dict[str, Any]) -> Dict[str, Any]:

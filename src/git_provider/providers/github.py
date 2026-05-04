@@ -216,6 +216,8 @@ class GitHubProvider(BaseGitProvider):
                 'role': 'REVIEWER',
                 'status': 'UNAPPROVED',
             })
+        comment_count = (pr.get('comments', 0) or 0) + (pr.get('review_comments', 0) or 0)
+
         return {
             'number': pr.get('number', 0),
             'title': pr.get('title', ''),
@@ -225,7 +227,9 @@ class GitHubProvider(BaseGitProvider):
             'updated_at': pr.get('updated_at', ''),
             'merged': pr.get('merged', False),
             'url': pr.get('html_url', ''),
+            'from_branch': pr.get('head', {}).get('ref', ''),
             'reviewers': reviewers,
+            'comment_count': comment_count,
         }
     
     def _normalize_commit(self, commit: Dict[str, Any]) -> Dict[str, Any]:

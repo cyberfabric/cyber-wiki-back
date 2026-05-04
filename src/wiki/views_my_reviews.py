@@ -82,6 +82,10 @@ def my_reviews(request):
     provider_cache: dict = {}
     fetch_targets = []  # list of (space, provider, repo_id)
 
+    # SaaS providers where there's only one instance (no self-hosted URL
+    # distinction), so base_url filtering would cause false negatives.
+    _SAAS_PROVIDERS = {'github'}
+
     for space in spaces:
         repo_slug = space.git_repository_id
         if not repo_slug:
@@ -94,10 +98,14 @@ def my_reviews(request):
                     user=user,
                     service_type=space.git_provider,
                 )
-                if space.git_base_url:
+                if space.git_base_url and space.git_provider not in _SAAS_PROVIDERS:
                     qs = qs.filter(base_url=space.git_base_url)
                 token = qs.first()
                 if not token:
+                    logger.debug(
+                        'No service token for space %s (provider=%s, base_url=%s)',
+                        space.slug, space.git_provider, space.git_base_url,
+                    )
                     provider_cache[key] = None
                 else:
                     token_username = token.get_username() or user.username or ''
