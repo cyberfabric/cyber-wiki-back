@@ -116,12 +116,12 @@ class GitProviderViewSet(viewsets.ViewSet):
             if code == 401:
                 return Response(
                     {
-                        'error': 'Authentication failed',
-                        'code': 'AUTHENTICATION_FAILED',
+                        'error': 'Git provider authentication failed',
+                        'code': 'GIT_PROVIDER_AUTH_FAILED',
                         'detail': 'Invalid credentials. Please check your tokens in the Configuration page and ensure they are valid and not expired.',
                         'help': 'Verify: 1) Git provider token is valid, 2) Username is correct, 3) Custom header token (if required) is valid and not expired',
                     },
-                    status=status.HTTP_401_UNAUTHORIZED,
+                    status=status.HTTP_502_BAD_GATEWAY,
                 )
             if code == 403:
                 return Response(

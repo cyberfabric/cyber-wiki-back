@@ -167,7 +167,10 @@ def my_reviews(request):
                     bot = sum(1 for a in authors if _is_bot(a, bot_prefixes))
                     return pr['number'], len(authors) - bot, bot
 
-                max_w = min(8, len(prs_with_comments))
+                # Cap inner workers to 3 so nested pools stay bounded.
+                # With up to 10 outer space-workers this gives ≤30 total
+                # concurrent upstream calls (vs 80 with the previous cap of 8).
+                max_w = min(3, len(prs_with_comments))
                 with ThreadPoolExecutor(max_workers=max_w) as pool:
                     futs = {pool.submit(_count_for_pr, pr): pr for pr in prs_with_comments}
                     counts = {}

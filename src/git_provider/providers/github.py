@@ -170,9 +170,6 @@ class GitHubProvider(BaseGitProvider):
     def get_pull_request_diff(self, repo_id: str, pr_number: int) -> str:
         """Get pull request diff."""
         headers = {**self.headers, 'Accept': 'application/vnd.github.v3.diff'}
-        response = self._request('GET', f'/repos/{repo_id}/pulls/{pr_number}')
-        
-        # Get diff via separate request
         diff_response = requests.get(
             f"{self.base_url}/repos/{repo_id}/pulls/{pr_number}",
             headers=headers
@@ -183,24 +180,38 @@ class GitHubProvider(BaseGitProvider):
     def get_pr_comment_authors(self, repo_id: str, pr_number: int) -> List[str]:
         """Return author usernames for all comments on a GitHub PR."""
         authors: List[str] = []
+
+        def _paginate(endpoint: str):
+            """Fetch all pages for a GitHub list endpoint."""
+            url = endpoint
+            params = {'per_page': 100}
+            while url:
+                try:
+                    resp = self._request('GET', url, params=params)
+                    for c in resp.json():
+                        login = (c.get('user') or {}).get('login', '')
+                        if login:
+                            authors.append(login)
+                    # Follow Link: <...>; rel="next" header for subsequent pages
+                    next_url = None
+                    link_header = resp.headers.get('Link', '')
+                    for part in link_header.split(','):
+                        if 'rel="next"' in part:
+                            next_url = part.split(';')[0].strip().strip('<>')
+                            break
+                    if next_url:
+                        # next_url is absolute; strip base_url so _request can prepend it
+                        url = next_url.replace(self.base_url, '')
+                        params = {}  # params are already embedded in next_url
+                    else:
+                        url = None
+                except Exception:
+                    break
+
         # Issue comments (conversation-level)
-        try:
-            resp = self._request('GET', f'/repos/{repo_id}/issues/{pr_number}/comments', params={'per_page': 100})
-            for c in resp.json():
-                login = (c.get('user') or {}).get('login', '')
-                if login:
-                    authors.append(login)
-        except Exception:
-            pass
+        _paginate(f'/repos/{repo_id}/issues/{pr_number}/comments')
         # Review comments (inline on diff)
-        try:
-            resp = self._request('GET', f'/repos/{repo_id}/pulls/{pr_number}/comments', params={'per_page': 100})
-            for c in resp.json():
-                login = (c.get('user') or {}).get('login', '')
-                if login:
-                    authors.append(login)
-        except Exception:
-            pass
+        _paginate(f'/repos/{repo_id}/pulls/{pr_number}/comments')
         return authors
 
     def list_commits(self, repo_id: str, branch: str = 'main', page: int = 1, per_page: int = 30) -> Dict[str, Any]:
