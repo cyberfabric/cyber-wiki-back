@@ -149,6 +149,38 @@ class GitHubProvider(BaseGitProvider):
             except Exception:
                 pass  # Non-critical — keep whatever _normalize_pr produced
 
+        # The list endpoint never includes `mergeable`; fetch from the detail
+        # endpoint concurrently so we can populate merge_status.
+        if normalized:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            def _fetch_merge_status(pr):
+                try:
+                    detail = self._request('GET', f'/repos/{repo_id}/pulls/{pr["number"]}').json()
+                    return pr['number'], detail.get('mergeable'), detail.get('draft', False)
+                except Exception:
+                    return pr['number'], None, None
+
+            merge_map: dict = {}
+            max_w = min(5, len(normalized))
+            with ThreadPoolExecutor(max_workers=max_w) as pool:
+                futs = [pool.submit(_fetch_merge_status, pr) for pr in normalized]
+                for fut in as_completed(futs):
+                    num, mergeable, draft = fut.result()
+                    if mergeable is not None or draft is not None:
+                        merge_map[num] = (mergeable, draft)
+
+            for pr in normalized:
+                info = merge_map.get(pr['number'])
+                if info:
+                    mergeable, draft = info
+                    if draft:
+                        pr['merge_status'] = 'draft'
+                    elif mergeable is True:
+                        pr['merge_status'] = 'clean'
+                    elif mergeable is False:
+                        pr['merge_status'] = 'conflict'
+
         if reviewer:
             reviewer_lower = reviewer.lower()
             normalized = [
@@ -271,6 +303,20 @@ class GitHubProvider(BaseGitProvider):
             })
         comment_count = (pr.get('comments', 0) or 0) + (pr.get('review_comments', 0) or 0)
 
+        # merge_status: 'clean' | 'conflict' | 'unknown' | 'draft'
+        # GitHub's list endpoint includes `draft` but not `mergeable` (only
+        # the detail endpoint returns that). When `mergeable` is present
+        # (detail call), map it; otherwise fall back to 'unknown'.
+        draft = bool(pr.get('draft', False))
+        if draft:
+            merge_status = 'draft'
+        elif pr.get('mergeable') is True:
+            merge_status = 'clean'
+        elif pr.get('mergeable') is False:
+            merge_status = 'conflict'
+        else:
+            merge_status = 'unknown'
+
         return {
             'number': pr.get('number', 0),
             'title': pr.get('title', ''),
@@ -283,6 +329,8 @@ class GitHubProvider(BaseGitProvider):
             'from_branch': pr.get('head', {}).get('ref', ''),
             'reviewers': reviewers,
             'comment_count': comment_count,
+            'draft': draft,
+            'merge_status': merge_status,
         }
     
     def _normalize_commit(self, commit: Dict[str, Any]) -> Dict[str, Any]:
